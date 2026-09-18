@@ -109,6 +109,7 @@ def _write_demo_files(demo_dir: Path, features: list[dict], utility: LineString,
         "storey_m": STOREY_M,
         "floors": FLOORS,
         "geom_origin": "SYNTHETIC",
+        "demo_freeze": "sih26011-kothrud-v01",
         "note": "Synthetic georeferenced Kothrud/Pune scene. Not official cadastral or ULPIN data.",
     }
     (demo_dir / "site.json").write_text(json.dumps(site, indent=2), encoding="utf-8")

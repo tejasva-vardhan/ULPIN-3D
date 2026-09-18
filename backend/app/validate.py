@@ -110,19 +110,17 @@ def run_validation(db: Session) -> dict:
         add(None, "UNIT_OVERLAP", True, "INFO", {"hits": []})
     for hit in overlaps:
         add(hit["bid"], "UNIT_OVERLAP", False, "ERROR", {"a": hit["a"], "b": hit["b"]})
-        db.execute(
-            text("UPDATE spatial_unit SET topology_status = 'INVALID' WHERE id = :id"),
-            {"id": hit["bid"]},
-        )
-        db.execute(
-            text(
-                """
-                UPDATE spatial_unit SET topology_status = 'VALID'
-                WHERE su_class = 'UNIT' AND id <> :id AND local_code NOT LIKE '%DUP%'
-                """
-            ),
-            {"id": hit["bid"]},
-        )
+        for code, uid in ((hit["a"], hit["aid"]), (hit["b"], hit["bid"])):
+            if "DUP" in str(code):
+                db.execute(
+                    text("UPDATE spatial_unit SET topology_status = 'INVALID' WHERE id = :id"),
+                    {"id": uid},
+                )
+            else:
+                db.execute(
+                    text("UPDATE spatial_unit SET topology_status = 'VALID' WHERE id = :id"),
+                    {"id": uid},
+                )
 
     floors = db.execute(
         text(

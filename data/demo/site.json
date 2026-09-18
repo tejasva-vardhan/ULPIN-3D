@@ -9,5 +9,6 @@
   "storey_m": 3.0,
   "floors": 5,
   "geom_origin": "SYNTHETIC",
+  "demo_freeze": "sih26011-kothrud-v01",
   "note": "Synthetic georeferenced Kothrud/Pune scene. Not official cadastral or ULPIN data."
 }

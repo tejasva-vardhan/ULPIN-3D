@@ -9,19 +9,14 @@ Done when the check in that file passes. Do not skip ahead.
 
 | Goal | Status | Evidence |
 |---|---|---|
-| 0 Frozen demo scene | DONE | `data/demo/*.geojson` now include `crs: EPSG:4326`; `bad_no_crs.json` has none on purpose |
-| 1 PostGIS legal spaces | DONE | Docker db:5433, `spatial_unit` + LADM-ish tables |
-| 2 Ingest + CRS hard-fail | DONE | `POST /sites`, `POST /datasets`. No EPSG → 400. parcel.geojson 4326 → `source_dataset` stored 32643 |
-| 3 Building from cloud | DONE | `POST /process/building` nDSM IoU ~0.94; fallback if IoU < 0.70 |
-| 4 Floors/units plans-first | DONE | F05-U501, F05-U502, F05-COMMON |
-| 5 SFCGAL solids | DONE | Flat 501 volume ~475 m³ |
-| 6 Underground utility | DONE | `UTL-WTR-01` z -3.2..-2.6 |
-| 7 Topology | DONE | UNIT_OVERLAP F05-U501 vs F05-U501-DUP; POST /issue DUP → 409 |
-| 8 Issuer | DONE | 501 = `IN-ULPIN3D/ULPIN14PLACE01/UNIT/F05-U501/v01`; DUP = `UNISSUED/F05-U501-DUP` |
-| 9 API demo path | DONE | GET parcel/building/floors/spatial-units/validation/model.gltf; POST sites/datasets/process/validate/issue |
-| 10 Cesium 30s | DONE (vanilla, not React) | isolate / 501 / Z-slice / underground / red DUP / **Fix overlap → VALID card** |
-| 11 Freeze/backup | **NEXT** | cold start twice + backup screen recording + judge Q&A from quick-ref PDF. Needs the user for recording |
+| 0–8 | DONE | Seeded Kothrud block, PostGIS, nDSM, SFCGAL, topology, issuer |
+| 2 Ingest | DONE | `POST /sites` `/datasets`; missing EPSG → 400 |
+| 9 API | DONE | GET parcel/building/floors/units/validation/`model.gltf`; POST process/validate/issue |
+| 10 Cesium | DONE (vanilla, not React) | http://localhost:8000 isolate / 501 / Z-slice / underground / DUP / Fix → VALID |
+| 11 Freeze | DONE | `demo_freeze=sih26011-kothrud-v01`. Happy path passed **twice** on `docker compose down && up` (22 units, IoU 0.938, UNIT_OVERLAP then fix, DUP issue 409). Screen recording is optional backup for the user — not in git |
 
-Run: `docker compose up` at repo root. UI http://localhost:8000
+Overlap INVALID is only the `*DUP*` unit; Flat 501 stays VALID and can issue.
 
-Do not rewrite Cesium in React unless asked. Do not start PointNet, live CORS, CityGML-as-DB, or extra repo markdown.
+Run: `docker compose up` at repo root. UI http://localhost:8000. GitHub: tejasva-vardhan/ULPIN-3D
+
+Do not: PointNet, live CORS, CityGML-as-DB, extra repo markdown, mint official ULPIN.
