@@ -5,16 +5,23 @@ alwaysApply: true
 
 # Build status (local goals: Downloads/SIH26011_BUILD_GOALS.md — not in git)
 
-Chats: [SIH26011 specs](46e49794-fb4f-4cfb-828d-81d43662c038), [SIH26011 plan](d5c0409c-249a-4526-b6f2-d3ed064136f7). GitHub tejasva-vardhan/ULPIN-3D on `main` (last push `bf20cf0`). CityGML + judge-script work may be uncommitted.
+Done when the check in that file passes. Do not skip ahead.
 
-| Goal | Status |
-|---|---|
-| 0–11 | DONE. Freeze `sih26011-kothrud-v01`. Cesium vanilla. DUP INVALID only; 501 issues. |
-| 12 CityGML LOD1 export | CODE DONE locally: `GET /export/citygml` + `/export/geojson`. Not necessarily pushed. |
-| 15 Underground easement RRR | DONE | GET /rrr UTL-WTR-01 RESTRICTION; Cesium Underground card |
+| Goal | Status | Evidence |
+|---|---|---|
+| 0–8 | DONE | Seeded Kothrud block, PostGIS, nDSM, SFCGAL, topology, issuer |
+| 2 Ingest | DONE | `POST /sites` `/datasets`; missing EPSG → 400 |
+| 9 API | DONE | GET parcel/building/floors/units/validation/`model.gltf`; POST process/validate/issue |
+| 10 Cesium | DONE (vanilla, not React) | http://localhost:8000 isolate / 501 / Z-slice / underground / DUP / Fix → VALID |
+| 11 Freeze | DONE | `demo_freeze=sih26011-kothrud-v01`. Happy path passed **twice** on `docker compose down && up` (22 units, IoU 0.938, UNIT_OVERLAP then fix, DUP issue 409). Screen recording is optional backup for the user — not in git |
+| 12 CityGML LOD1 | DONE | `GET /export/citygml` + `/export/geojson`. Physical only; not a CityGML DB |
+| 13 COMMON + ID rejects | DONE | COMMON share 0.5; UUID/ISO/shp → 400 |
+| 14 DEGRADED no-plans | DONE | F02–F05-WHOLE UNISSUED; issue 409; Restore → 22 |
+| 15 Easement RRR | DONE | `GET /rrr` UTL-WTR-01 RESTRICTION; pushed `df67a82` |
+| 16 Record card + versioning | DONE | `GET /record/{code}` + `/html`; `POST /units/{code}/new-version`; ACTIVE list; Play demo / Record card / New version |
 
-**Not done / do not:** React rewrite, PointNet, live CORS client, CityGML-as-DB, SVAMITVA dumps, mint official ULPIN, extra repo markdown, screen recording in git.
+Overlap INVALID is only the `*DUP*` unit; Flat 501 stays VALID and can issue.
 
-**Next after 13:** only SIH demo polish judges still lack (do not expand to IFC/3D Tiles unless asked).
+Run: `docker compose up` at repo root. UI http://localhost:8000. GitHub: tejasva-vardhan/ULPIN-3D
 
-Run: `docker compose up` → http://localhost:8000
+Do not: PointNet, live CORS, CityGML-as-DB, extra repo markdown, mint official ULPIN.

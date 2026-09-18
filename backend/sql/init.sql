@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS spatial_unit (
   topology_status topology_status NOT NULL DEFAULT 'PENDING',
   geom_hash       text,
   baunit_id       uuid REFERENCES baunit(id),
+  derived_from    uuid REFERENCES spatial_unit(id),
   valid_from      timestamptz NOT NULL DEFAULT now(),
   valid_to        timestamptz,
   created_at      timestamptz NOT NULL DEFAULT now(),

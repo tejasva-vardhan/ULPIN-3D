@@ -27,6 +27,7 @@
     <h1>ULPIN-3D · Kothrud synthetic block</h1>
     <div class="muted">Proposed 3D ULPIN under placeholder parent ULPIN14PLACE01. Not official. Official ULPIN names the land. We name the volume.</div>
     <div>
+      <button id="btnPlay">Play demo</button>
       <button id="btnParcel">Parcel + parent</button>
       <button id="btn501">Flat 501</button>
       <button id="btnCommon">COMMON corridor</button>
@@ -35,6 +36,8 @@
       <button id="btnFix">Fix overlap</button>
       <button id="btnVal">Run validation</button>
       <button id="btnExt">Extract building</button>
+      <button id="btnRecord">Record card</button>
+      <button id="btnNewVer">New version</button>
       <button id="btnGml">CityGML LOD1</button>
       <button id="btnGj">Legal GeoJSON</button>
       <button id="btnNoPlans">No floor plans</button>
@@ -86,6 +89,18 @@
     const units = [];
     const rrrByCode = {};
     let globeHidden = false;
+    let selectedCode = "F05-U501";
+    let demoPlaying = false;
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function setZSlice(val) {
+      const z = document.getElementById("zSlice");
+      z.value = String(val);
+      z.dispatchEvent(new Event("input"));
+    }
 
     function parseGj(raw) {
       return typeof raw === "string" ? JSON.parse(raw) : raw;
@@ -160,6 +175,7 @@
     function show(code) {
       const found = units.find((u) => u.rec.local_code === code);
       if (!found) return;
+      selectedCode = code;
       const { entity, rec } = found;
       entity.show = true;
       viewer.selectedEntity = entity;
@@ -280,8 +296,12 @@
       });
     };
     document.getElementById("btnExt").onclick = () => {
+      runExtract();
+    };
+
+    function runExtract() {
       card("Extracting nDSM footprint…");
-      fetch("/process/building", { method: "POST" }).then((r) => r.json()).then((v) => {
+      return fetch("/process/building", { method: "POST" }).then((r) => r.json()).then((v) => {
         const old = viewer.entities.getById("EXTRACT");
         if (old) viewer.entities.remove(old);
         if (v.geojson) {
@@ -305,10 +325,11 @@
           "\n" + v.note
         );
         lookAtSite();
+        return v;
       }).catch((err) => {
         card("Extract failed: " + err);
       });
-    };
+    }
     document.getElementById("btnGj").onclick = () => {
       card("Exporting legal GeoJSON footprints…");
       fetch("/export/geojson").then((r) => {
@@ -359,6 +380,80 @@
       fetch("/demo/seed", { method: "POST" }).then((r) => r.json()).then((v) => {
         loadScene("Plans restored. " + v.spatial_units + " units. Click Parcel + parent, then Flat 501.");
       }).catch((err) => card("Restore failed: " + err));
+    };
+
+    document.getElementById("btnRecord").onclick = () => {
+      const code = selectedCode || "F05-U501";
+      window.open("/record/" + encodeURIComponent(code) + "/html", "_blank");
+      fetch("/record/" + encodeURIComponent(code)).then((r) => {
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      }).then((rec) => {
+        card(
+          "Record card (not a title)\n" + rec.display_id +
+          "\nUUID " + rec.uuid +
+          "\nparent " + rec.parent_ulpin + "  v" + String(rec.version).padStart(2, "0") +
+          "\nWKT stored EPSG:32643\n" + (rec.wkt_32643 || "") +
+          "\nProposed 3D ULPIN is not official."
+        );
+      }).catch((err) => card("Record card failed: " + err));
+    };
+
+    document.getElementById("btnNewVer").onclick = () => {
+      const code = selectedCode && !String(selectedCode).includes("DUP") ? selectedCode : "F05-U501";
+      card("Legal event: new UUID + version. Parent ULPIN unchanged…");
+      fetch("/units/" + encodeURIComponent(code) + "/new-version", { method: "POST" }).then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.detail || r.status);
+        return body;
+      }).then((v) => {
+        loadScene(
+          "New version (not a recycled ID)\n" + v.new_display +
+          "\nsuperseded " + v.superseded_uuid +
+          "\nnew UUID " + v.new_uuid +
+          "\nparent ULPIN unchanged: " + v.parent_ulpin +
+          "\n" + (v.note || "")
+        );
+        selectedCode = v.local_code;
+      }).catch((err) => card("New version failed: " + err));
+    };
+
+    document.getElementById("btnPlay").onclick = async () => {
+      if (demoPlaying) return;
+      demoPlaying = true;
+      try {
+        setZSlice(16);
+        document.getElementById("floorSel").value = "all";
+        applyFilters();
+        show("LOT");
+        card("Demo 1/7 · Parcel. Official ULPIN names the land. We name the volume.\nParent placeholder ULPIN14PLACE01. Proposed 3D ULPIN is not official.");
+        await sleep(3200);
+        card("Demo 2/7 · Classical nDSM extract. AI_DERIVED, not legal title.");
+        await runExtract();
+        await sleep(2800);
+        document.getElementById("floorSel").value = "5";
+        applyFilters();
+        show("F05-U501");
+        card("Demo 3/7 · Flat 501 volume under parent ULPIN14PLACE01.\nProposed display IN-ULPIN3D/…/UNIT/F05-U501/vNN. Not official.");
+        await sleep(3200);
+        show("F05-COMMON");
+        card("Demo 4/7 · COMMON corridor. Undivided share (RERA-style, synthetic). Not a private title.");
+        await sleep(2800);
+        setZSlice(9);
+        card("Demo 5/7 · Z-slice. Legal solids clipped by LOCAL_SITE height.");
+        await sleep(2800);
+        setZSlice(16);
+        show("UTL-WTR-01");
+        card("Demo 6/7 · Underground water main. Corridor solid + easement-style RESTRICTION. Not a new statute.");
+        await sleep(3200);
+        show("F05-U501-DUP");
+        card(
+          "Demo 7/7 · Seeded overlap INVALID. ID blocked. Do not issue.\n" +
+          "Play demo stops here so judges see INVALID. Click Fix overlap when ready."
+        );
+      } finally {
+        demoPlaying = false;
+      }
     };
   </script>
 </body>

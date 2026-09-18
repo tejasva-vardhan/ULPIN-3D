@@ -2,11 +2,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy import text
 
 from app.config import settings
-from app.db import SessionLocal, engine
+from app.db import SessionLocal, engine, ensure_schema
+from app.record import fetch_record, record_html, supersede_new_version
 from app.geo import CrsError, require_epsg, to_wgs_geojson
 from app.citygml_export import building_lod1_citygml
 from app.gltf_export import prisms_to_gltf
@@ -26,6 +27,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _startup_schema():
+    try:
+        ensure_schema()
+    except Exception:
+        pass
 
 
 @app.get("/")
@@ -152,10 +161,11 @@ def list_units():
         rows = db.execute(
             text(
                 """
-                SELECT display_id, su_class, local_code, parent_ulpin,
+                SELECT display_id, su_class, local_code, parent_ulpin, version, status,
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
+                WHERE status = 'ACTIVE'
                 ORDER BY su_class, local_code
                 """
             )
@@ -172,11 +182,13 @@ def get_unit(local_code: str):
         row = db.execute(
             text(
                 """
-                SELECT display_id, su_class, local_code, parent_ulpin,
+                SELECT display_id, su_class, local_code, parent_ulpin, version, status,
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
-                WHERE local_code = :code
+                WHERE local_code = :code AND status = 'ACTIVE'
+                ORDER BY version DESC
+                LIMIT 1
                 """
             ),
             {"code": local_code},
@@ -194,11 +206,11 @@ def _units_of_class(su_class: str):
         rows = db.execute(
             text(
                 """
-                SELECT display_id, su_class, local_code, parent_ulpin,
+                SELECT display_id, su_class, local_code, parent_ulpin, version, status,
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
-                WHERE su_class = :cls
+                WHERE su_class = :cls AND status = 'ACTIVE'
                 ORDER BY zmin, local_code
                 """
             ),
@@ -243,6 +255,7 @@ def get_rrr():
                 FROM rrr r
                 JOIN spatial_unit s ON s.id = r.spatial_unit_id
                 JOIN party p ON p.id = r.party_id
+                WHERE s.status = 'ACTIVE'
                 ORDER BY s.local_code
                 """
             )
@@ -267,7 +280,8 @@ def issue_unit(local_code: str):
                 """
                 SELECT id, parent_ulpin, su_class, local_code, version,
                        display_id, topology_status
-                FROM spatial_unit WHERE local_code = :code
+                FROM spatial_unit WHERE local_code = :code AND status = 'ACTIVE'
+                ORDER BY version DESC LIMIT 1
                 """
             ),
             {"code": local_code},
@@ -305,6 +319,74 @@ def issue_unit(local_code: str):
         db.close()
 
 
+@app.get("/record/{local_code}")
+def get_record(local_code: str):
+    db = SessionLocal()
+    try:
+        ensure_schema()
+        rec = fetch_record(db, local_code)
+        if not rec:
+            raise HTTPException(status_code=404, detail="not found")
+        return rec
+    finally:
+        db.close()
+
+
+@app.get("/record/{local_code}/html")
+def get_record_html(local_code: str):
+    db = SessionLocal()
+    try:
+        ensure_schema()
+        rec = fetch_record(db, local_code)
+        if not rec:
+            raise HTTPException(status_code=404, detail="not found")
+        return HTMLResponse(record_html(rec))
+    finally:
+        db.close()
+
+
+@app.get("/spatial-units/by-code/{local_code}/versions")
+def list_unit_versions(local_code: str):
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT id::text AS uuid, display_id, version, status, derived_from::text AS derived_from,
+                       topology_status, valid_from, valid_to
+                FROM spatial_unit
+                WHERE local_code = :code
+                ORDER BY version
+                """
+            ),
+            {"code": local_code},
+        ).mappings().all()
+        if not rows:
+            raise HTTPException(status_code=404, detail="not found")
+        return {"local_code": local_code, "count": len(rows), "versions": [dict(r) for r in rows]}
+    finally:
+        db.close()
+
+
+@app.post("/units/{local_code}/new-version")
+def new_unit_version(local_code: str):
+    db = SessionLocal()
+    try:
+        result = supersede_new_version(db, local_code)
+        db.commit()
+        return result
+    except ValueError as exc:
+        db.rollback()
+        msg = str(exc)
+        code = 404 if msg == "not found" else 409
+        raise HTTPException(status_code=code, detail=msg) from exc
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @app.post("/process/building")
 def process_building():
     db = SessionLocal()
@@ -314,7 +396,7 @@ def process_building():
         meta = write_synthetic_las(las_path)
         extracted = extract_footprint(las_path)
         ref = db.execute(
-            text("SELECT ST_AsText(geom_2d) AS wkt FROM spatial_unit WHERE su_class='BUILDING' LIMIT 1")
+            text("SELECT ST_AsText(geom_2d) AS wkt FROM spatial_unit WHERE su_class='BUILDING' AND status='ACTIVE' LIMIT 1")
         ).scalar()
         if not ref:
             raise HTTPException(status_code=400, detail="seed the demo before extracting")
@@ -337,7 +419,7 @@ def process_building():
                 UPDATE building SET extraction_method = :m,
                   z_ground = COALESCE(z_ground, 0),
                   z_roof = COALESCE(z_roof, 15)
-                WHERE spatial_unit_id = (SELECT id FROM spatial_unit WHERE su_class='BUILDING' LIMIT 1)
+                WHERE spatial_unit_id = (SELECT id FROM spatial_unit WHERE su_class='BUILDING' AND status='ACTIVE' LIMIT 1)
                 """
             ),
             {"m": extracted["method"]},
@@ -445,6 +527,7 @@ def model_gltf():
                 SELECT local_code, zmin, zmax, ST_AsText(geom_2d) AS wkt
                 FROM spatial_unit
                 WHERE su_class IN ('UNIT','COMMON','PARKING','UTILITY')
+                  AND status = 'ACTIVE'
                   AND local_code NOT LIKE '%DUP%'
                 ORDER BY zmin, local_code
                 """
@@ -467,7 +550,7 @@ def export_citygml():
                 """
                 SELECT local_code, display_id, parent_ulpin, geom_origin,
                        zmin, zmax, ST_AsText(geom_2d) AS wkt
-                FROM spatial_unit WHERE su_class = 'BUILDING'
+                FROM spatial_unit WHERE su_class = 'BUILDING' AND status = 'ACTIVE'
                 ORDER BY local_code LIMIT 1
                 """
             )
@@ -498,7 +581,7 @@ def export_geojson():
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
-                WHERE local_code NOT LIKE '%DUP%'
+                WHERE local_code NOT LIKE '%DUP%' AND status = 'ACTIVE'
                 ORDER BY su_class, local_code
                 """
             )
@@ -564,7 +647,7 @@ def fix_overlap():
             text(
                 """
                 SELECT display_id, topology_status, confidence, geom_origin, volume_m3
-                FROM spatial_unit WHERE local_code = 'F05-U501'
+                FROM spatial_unit WHERE local_code = 'F05-U501' AND status = 'ACTIVE'
                 """
             )
         ).mappings().first()

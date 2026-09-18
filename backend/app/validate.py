@@ -51,6 +51,7 @@ def run_validation(db: Session) -> dict:
                    ST_IsValid(geom_2d) AS ok2d,
                    ST_SRID(geom_2d) AS srid
             FROM spatial_unit
+            WHERE status = 'ACTIVE'
             """
         )
     ).mappings().all()
@@ -67,7 +68,8 @@ def run_validation(db: Session) -> dict:
             SELECT c.id, c.local_code
             FROM spatial_unit c
             JOIN spatial_unit p ON p.id = c.parent_id
-            WHERE NOT ST_CoveredBy(ST_Buffer(c.geom_2d, 0.02), ST_Buffer(p.geom_2d, 0.05))
+            WHERE c.status = 'ACTIVE' AND p.status = 'ACTIVE'
+              AND NOT ST_CoveredBy(ST_Buffer(c.geom_2d, 0.02), ST_Buffer(p.geom_2d, 0.05))
               AND c.su_class NOT IN ('UTILITY')
             """
         )
@@ -82,8 +84,8 @@ def run_validation(db: Session) -> dict:
             """
             SELECT b.id, b.local_code
             FROM spatial_unit b
-            JOIN spatial_unit p ON p.su_class = 'PARCEL'
-            WHERE b.su_class = 'BUILDING'
+            JOIN spatial_unit p ON p.su_class = 'PARCEL' AND p.status = 'ACTIVE'
+            WHERE b.su_class = 'BUILDING' AND b.status = 'ACTIVE'
               AND NOT ST_CoveredBy(ST_Buffer(b.geom_2d, 0.02), ST_Buffer(p.geom_2d, 0.05))
             """
         )
@@ -100,6 +102,7 @@ def run_validation(db: Session) -> dict:
             FROM spatial_unit a
             JOIN spatial_unit b ON a.id < b.id
             WHERE a.su_class = 'UNIT' AND b.su_class = 'UNIT'
+              AND a.status = 'ACTIVE' AND b.status = 'ACTIVE'
               AND ST_Intersects(a.geom_2d, b.geom_2d)
               AND ST_Area(ST_Intersection(a.geom_2d, b.geom_2d)) > 0.05
               AND a.zmin < b.zmax AND b.zmin < a.zmax
@@ -127,7 +130,7 @@ def run_validation(db: Session) -> dict:
             """
             SELECT local_code, zmin, zmax
             FROM spatial_unit
-            WHERE su_class = 'FLOOR'
+            WHERE su_class = 'FLOOR' AND status = 'ACTIVE'
             ORDER BY zmin
             """
         )
@@ -146,7 +149,7 @@ def run_validation(db: Session) -> dict:
             """
             SELECT id, local_code, zmax
             FROM spatial_unit
-            WHERE su_class = 'UTILITY' AND zmax >= 0
+            WHERE su_class = 'UTILITY' AND status = 'ACTIVE' AND zmax >= 0
             """
         )
     ).mappings().all()
