@@ -1,0 +1,35 @@
+{
+  "type": "FeatureCollection",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "EPSG:4326"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "local_code": "UTL-WTR-01",
+        "su_class": "UTILITY",
+        "diameter_m": 0.3,
+        "zmin": -3.2,
+        "zmax": -2.6,
+        "assumed_depth": true
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            73.80773769871072,
+            18.507427347367827
+          ],
+          [
+            73.80805973341512,
+            18.50742937674793
+          ]
+        ]
+      }
+    }
+  ]
+}

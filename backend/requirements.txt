@@ -1,0 +1,11 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+geoalchemy2==0.16.0
+pyproj==3.7.1
+shapely==2.0.6
+pydantic-settings==2.6.1
+numpy==2.2.2
+laspy==2.5.4
+

@@ -1,0 +1,13 @@
+{
+  "name": "Kothrud demo block (synthetic)",
+  "source_epsg": 4326,
+  "storage_epsg": 32643,
+  "z_ref": "LOCAL_SITE",
+  "parent_ulpin": "ULPIN14PLACE01",
+  "origin_lon": 73.8077,
+  "origin_lat": 18.5074,
+  "storey_m": 3.0,
+  "floors": 5,
+  "geom_origin": "SYNTHETIC",
+  "note": "Synthetic georeferenced Kothrud/Pune scene. Not official cadastral or ULPIN data."
+}

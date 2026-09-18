@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgis/postgis:16-3.5
+    environment:
+      POSTGRES_USER: ulpin
+      POSTGRES_PASSWORD: ulpin
+      POSTGRES_DB: ulpin3d
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ulpin -d ulpin3d"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://ulpin:ulpin@db:5432/ulpin3d
+      DEMO_DIR: /data/demo
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data:/data
+      - ./backend/app:/code/app
+      - ./frontend:/frontend
+
+volumes:
+  pgdata:

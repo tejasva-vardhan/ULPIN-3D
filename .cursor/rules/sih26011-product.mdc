@@ -1,0 +1,17 @@
+---
+description: SIH26011 product facts — never contradict these
+alwaysApply: true
+---
+
+# SIH26011 / ULPIN-3D (product)
+
+- Problem SIH26011, DoLR/MoRD. Official PS: sih.gov.in/sih2026PS. Portal dataset is empty; do not invent SVAMITVA/Bhu-Naksha dumps.
+- Official ULPIN = 14-char **surface** parcel ID from vertices. It is not 3D. No official 3D ULPIN standard exists.
+- Always say: **Our 3D ULPIN is a proposed extension compatible with existing ULPIN.** Never call it official. Never mint a government ID.
+- Demo line: Official ULPIN names the land. We name the volume.
+- Display: `IN-ULPIN3D/{parent_ulpin}/{CLASS}/{local}/vNN` + UUID PK. Parent must be 14 chars (official or labelled placeholder `ULPIN14PLACE01`). Reject ISO 8000-118 as cadastral ID; reject UUID-only display. INVALID units stay `UNISSUED/{local}` until topology is VALID.
+- Store EPSG:32643, source demo EPSG:4326, Z `LOCAL_SITE`. Missing EPSG = hard fail (do not guess).
+- Geometry: 2D footprint + zmin/zmax + SFCGAL prism. Topology = SQL/Shapely, never ML. Extract = classical nDSM (AI_DERIVED, not legal title). Plans win over LiDAR for floors.
+- Stack in repo: FastAPI + PostGIS 16/3.5 + SFCGAL + Shapely/pyproj + CesiumJS 1.119 served from `frontend/index.html`. LADM-aligned, not ISO-certified. CityGML export-only.
+- Do not: PointNet, live CORS client, CityGML as the database, extra markdown in the repo, commit/push unless asked.
+- Author: tejasva-vardhan only. No Co-Authored-By.

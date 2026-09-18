@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>ULPIN-3D demo</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
+  <style>
+    html, body, #cesiumContainer { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    #cesiumContainer { z-index: 0; }
+    #card {
+      position: absolute; top: 12px; left: 12px; z-index: 10000;
+      background: rgba(12,16,22,.92); color: #e8eef4; padding: 12px 14px;
+      width: 380px; font: 13px/1.4 Segoe UI, sans-serif; border-radius: 6px;
+      pointer-events: auto;
+    }
+    #card h1 { font-size: 14px; margin: 0 0 6px; }
+    #card .muted { color: #9aa7b5; font-size: 12px; }
+    #meta { margin-top: 8px; white-space: pre-wrap; }
+    button, select { margin: 4px 4px 0 0; }
+    label { font-size: 12px; color: #c5d0da; display: block; margin-top: 8px; }
+    input[type=range] { width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="card">
+    <h1>ULPIN-3D · Kothrud synthetic block</h1>
+    <div class="muted">Proposed 3D ULPIN under placeholder parent ULPIN14PLACE01. Not official. Official ULPIN names the land. We name the volume.</div>
+    <div>
+      <button id="btn501">Flat 501</button>
+      <button id="btnPipe">Underground</button>
+      <button id="btnDup">Show overlap error</button>
+      <button id="btnFix">Fix overlap</button>
+      <button id="btnVal">Run validation</button>
+      <button id="btnExt">Extract building</button>
+    </div>
+    <label>Floor isolate
+      <select id="floorSel">
+        <option value="all">All floors</option>
+        <option value="1">1 / parking</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="5">5 (Flat 501)</option>
+      </select>
+    </label>
+    <label>Z-slice <span id="zLabel">all</span>
+      <input id="zSlice" type="range" min="-4" max="16" step="0.5" value="16"/>
+    </label>
+    <div id="meta" class="muted">Loading…</div>
+  </div>
+  <div id="cesiumContainer"></div>
+  <script>
+    const viewer = new Cesium.Viewer("cesiumContainer", {
+      baseLayerPicker: false,
+      animation: false,
+      timeline: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      navigationHelpButton: true,
+      fullscreenButton: true,
+      imageryProvider: new Cesium.TileMapServiceImageryProvider({
+        url: Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII"),
+      }),
+      terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+    });
+    viewer.scene.globe.depthTestAgainstTerrain = false;
+    viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
+
+    const colors = {
+      PARCEL: Cesium.Color.YELLOW.withAlpha(0.18),
+      BUILDING: Cesium.Color.SLATEGRAY.withAlpha(0.18),
+      UNIT: Cesium.Color.CYAN.withAlpha(0.55),
+      COMMON: Cesium.Color.ORANGE.withAlpha(0.45),
+      PARKING: Cesium.Color.PURPLE.withAlpha(0.45),
+      UTILITY: Cesium.Color.LIME.withAlpha(0.85),
+    };
+
+    const units = [];
+    let globeHidden = false;
+
+    function parseGj(raw) {
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    }
+
+    function hierarchyFromGj(gj) {
+      const ring = gj.coordinates[0];
+      return ring.map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat));
+    }
+
+    function issuedLabel(u) {
+      const id = String(u.display_id || "");
+      if (id.startsWith("UNISSUED/") || u.topology_status === "INVALID") {
+        return "ID blocked (topology INVALID). Proposed 3D ULPIN is not issued.";
+      }
+      return id;
+    }
+
+    function addUnit(u) {
+      const gj = parseGj(u.geojson);
+      if (!gj || !gj.coordinates) return;
+      const isDup = String(u.local_code).includes("DUP");
+      const color = isDup ? Cesium.Color.RED.withAlpha(0.8) : (colors[u.su_class] || Cesium.Color.WHITE.withAlpha(0.3));
+      const e = viewer.entities.add({
+        id: u.local_code,
+        name: u.display_id,
+        show: !isDup && u.su_class !== "FLOOR",
+        polygon: {
+          hierarchy: hierarchyFromGj(gj),
+          height: Number(u.zmin),
+          extrudedHeight: Number(u.zmax),
+          material: color,
+          outline: true,
+          outlineColor: Cesium.Color.WHITE,
+        },
+      });
+      units.push({ entity: e, rec: u, isDup });
+    }
+
+    function applyFilters() {
+      const floor = document.getElementById("floorSel").value;
+      const zCut = parseFloat(document.getElementById("zSlice").value);
+      const zAll = zCut >= 16;
+      document.getElementById("zLabel").textContent = zAll ? "all" : ("z ≤ " + zCut + " m");
+      const selected = viewer.selectedEntity && viewer.selectedEntity.id;
+      units.forEach(({ entity, rec, isDup }) => {
+        if (rec.su_class === "FLOOR") { entity.show = false; return; }
+        if (isDup && selected !== rec.local_code) { entity.show = false; return; }
+        let ok = true;
+        if (floor !== "all") {
+          if (rec.su_class === "BUILDING") ok = false;
+          if (["UNIT", "COMMON", "PARKING"].includes(rec.su_class)) {
+            const fl = Math.ceil(Number(rec.zmax) / 3);
+            ok = String(fl) === floor;
+          }
+        }
+        if (ok && !zAll && rec.su_class !== "UTILITY") ok = Number(rec.zmin) <= zCut;
+        if (!zAll && rec.su_class === "BUILDING") ok = false;
+        entity.show = !!ok && !(isDup && selected !== rec.local_code);
+      });
+    }
+
+    function setGlobe(show) {
+      globeHidden = !show;
+      viewer.scene.globe.show = show;
+    }
+
+    function card(text) {
+      document.getElementById("meta").textContent = text;
+    }
+
+    function show(code) {
+      const found = units.find((u) => u.rec.local_code === code);
+      if (!found) return;
+      const { entity, rec } = found;
+      entity.show = true;
+      viewer.selectedEntity = entity;
+      if (code === "UTL-WTR-01") setGlobe(false);
+      else setGlobe(true);
+      card(
+        issuedLabel(rec) +
+        "\nclass " + rec.su_class + "  z " + rec.zmin + "–" + rec.zmax +
+        " m\nvolume " + Number(rec.volume_m3 || 0).toFixed(1) + " m³  topology " + rec.topology_status +
+        "\norigin " + rec.geom_origin + "  parent " + rec.parent_ulpin +
+        "\nconfidence " + rec.confidence
+      );
+      applyFilters();
+      entity.show = true;
+      lookAtSite(code === "UTL-WTR-01" ? 55 : 80);
+    }
+
+    function lookAtSite(rangeM) {
+      const center = Cesium.Cartesian3.fromDegrees(73.80785, 18.50750, 8);
+      const transform = Cesium.Transforms.eastNorthUpToFixedFrame(center);
+      viewer.camera.lookAtTransform(
+        transform,
+        new Cesium.HeadingPitchRange(
+          Cesium.Math.toRadians(35),
+          Cesium.Math.toRadians(-32),
+          rangeM || 90
+        )
+      );
+    }
+
+    fetch("/spatial-units").then((r) => r.json()).then((data) => {
+      data.units.forEach(addUnit);
+      card(data.count + " spatial units loaded. Click Flat 501.");
+      applyFilters();
+      lookAtSite();
+    });
+
+    document.getElementById("btn501").onclick = () => {
+      document.getElementById("floorSel").value = "5";
+      applyFilters();
+      show("F05-U501");
+    };
+    document.getElementById("btnPipe").onclick = () => show("UTL-WTR-01");
+    document.getElementById("btnDup").onclick = () => show("F05-U501-DUP");
+    document.getElementById("btnFix").onclick = () => {
+      card("Withdrawing seeded overlap…");
+      fetch("/demo/fix-overlap", { method: "POST" }).then((r) => r.json()).then((v) => {
+        const dup = viewer.entities.getById("F05-U501-DUP");
+        if (dup) viewer.entities.remove(dup);
+        for (let i = units.length - 1; i >= 0; i--) {
+          if (units[i].isDup) units.splice(i, 1);
+        }
+        const rec = v.flat_501 || {};
+        const found = units.find((u) => u.rec.local_code === "F05-U501");
+        if (found) {
+          found.rec.topology_status = rec.topology_status;
+          found.rec.display_id = rec.display_id;
+          found.rec.confidence = rec.confidence;
+        }
+        document.getElementById("floorSel").value = "5";
+        applyFilters();
+        show("F05-U501");
+        card(
+          "VALID card\n" + (rec.display_id || "") +
+          "\ntopology " + rec.topology_status + "  origin " + rec.geom_origin +
+          "  confidence " + rec.confidence +
+          "\nvolume " + Number(rec.volume_m3 || 0).toFixed(1) + " m³" +
+          "\n" + (v.note || "")
+        );
+      });
+    };
+    document.getElementById("floorSel").onchange = applyFilters;
+    document.getElementById("zSlice").oninput = applyFilters;
+    document.getElementById("btnVal").onclick = () => {
+      fetch("/validate", { method: "POST" }).then((r) => r.json()).then((v) => {
+        const fails = v.findings.filter((f) => !f.passed);
+        card(
+          "Validation errors: " + v.error_count + " / " + v.finding_count + " checks\n" +
+          fails.map((f) => f.rule_code + " " + JSON.stringify(f.detail)).join("\n")
+        );
+      });
+    };
+    document.getElementById("btnExt").onclick = () => {
+      card("Extracting nDSM footprint…");
+      fetch("/process/building", { method: "POST" }).then((r) => r.json()).then((v) => {
+        const old = viewer.entities.getById("EXTRACT");
+        if (old) viewer.entities.remove(old);
+        if (v.geojson) {
+          const gj = parseGj(v.geojson);
+          viewer.entities.add({
+            id: "EXTRACT",
+            name: "nDSM extract (not legal)",
+            polygon: {
+              hierarchy: hierarchyFromGj(gj),
+              height: 0,
+              extrudedHeight: 0.4,
+              material: Cesium.Color.YELLOW.withAlpha(0.55),
+              outline: true,
+              outlineColor: Cesium.Color.YELLOW,
+            },
+          });
+        }
+        card(
+          "Classical nDSM extract (not legal title)\npoints " + v.las.n_points +
+          "  IoU vs authored building " + Number(v.iou_vs_authored_building).toFixed(3) +
+          "\n" + v.note
+        );
+        lookAtSite();
+      }).catch((err) => {
+        card("Extract failed: " + err);
+      });
+    };
+  </script>
+</body>
+</html>
