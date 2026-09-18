@@ -27,12 +27,18 @@
     <h1>ULPIN-3D · Kothrud synthetic block</h1>
     <div class="muted">Proposed 3D ULPIN under placeholder parent ULPIN14PLACE01. Not official. Official ULPIN names the land. We name the volume.</div>
     <div>
+      <button id="btnParcel">Parcel + parent</button>
       <button id="btn501">Flat 501</button>
+      <button id="btnCommon">COMMON corridor</button>
       <button id="btnPipe">Underground</button>
       <button id="btnDup">Show overlap error</button>
       <button id="btnFix">Fix overlap</button>
       <button id="btnVal">Run validation</button>
       <button id="btnExt">Extract building</button>
+      <button id="btnGml">CityGML LOD1</button>
+      <button id="btnGj">Legal GeoJSON</button>
+      <button id="btnNoPlans">No floor plans</button>
+      <button id="btnRestore">Restore plans</button>
     </div>
     <label>Floor isolate
       <select id="floorSel">
@@ -78,6 +84,7 @@
     };
 
     const units = [];
+    const rrrByCode = {};
     let globeHidden = false;
 
     function parseGj(raw) {
@@ -158,12 +165,24 @@
       viewer.selectedEntity = entity;
       if (code === "UTL-WTR-01") setGlobe(false);
       else setGlobe(true);
+      let extra = "";
+      if (rec.su_class === "COMMON") {
+        const rr = rrrByCode[code];
+        extra = "\nCOMMON is association undivided share (RERA-style, synthetic). Not a private title.";
+        if (rr) extra += "\nRRR " + rr.rrr_type + " share " + rr.share + "  " + rr.party_name + "\n" + rr.description;
+      }
+      if (rec.su_class === "UTILITY") {
+        extra = "\nUnderground utility prism. Depth assumed for demo (LOCAL_SITE). Not a new statute.";
+      }
+      if (rec.topology_status === "DEGRADED") {
+        extra += "\nDEGRADED: no floor plans. Height / 3.0 m whole-floor prism. No fake VALID. ID not issued.";
+      }
       card(
         issuedLabel(rec) +
         "\nclass " + rec.su_class + "  z " + rec.zmin + "–" + rec.zmax +
         " m\nvolume " + Number(rec.volume_m3 || 0).toFixed(1) + " m³  topology " + rec.topology_status +
         "\norigin " + rec.geom_origin + "  parent " + rec.parent_ulpin +
-        "\nconfidence " + rec.confidence
+        "\nconfidence " + rec.confidence + extra
       );
       applyFilters();
       entity.show = true;
@@ -183,17 +202,40 @@
       );
     }
 
-    fetch("/spatial-units").then((r) => r.json()).then((data) => {
-      data.units.forEach(addUnit);
-      card(data.count + " spatial units loaded. Click Flat 501.");
-      applyFilters();
-      lookAtSite();
-    });
+    function loadScene(msg) {
+      units.forEach((u) => viewer.entities.remove(u.entity));
+      units.length = 0;
+      Object.keys(rrrByCode).forEach((k) => { delete rrrByCode[k]; });
+      const extract = viewer.entities.getById("EXTRACT");
+      if (extract) viewer.entities.remove(extract);
+      Promise.all([
+        fetch("/spatial-units").then((r) => r.json()),
+        fetch("/rrr").then((r) => r.json()).catch(() => ({ rrr: [] })),
+      ]).then(([data, rr]) => {
+        (rr.rrr || []).forEach((row) => { rrrByCode[row.local_code] = row; });
+        data.units.forEach(addUnit);
+        applyFilters();
+        lookAtSite();
+        if (msg) card(msg);
+        else card(data.count + " spatial units loaded. Click Parcel + parent, then Flat 501.");
+      });
+    }
+    loadScene();
 
+    document.getElementById("btnParcel").onclick = () => {
+      document.getElementById("floorSel").value = "all";
+      applyFilters();
+      show("LOT");
+    };
     document.getElementById("btn501").onclick = () => {
       document.getElementById("floorSel").value = "5";
       applyFilters();
       show("F05-U501");
+    };
+    document.getElementById("btnCommon").onclick = () => {
+      document.getElementById("floorSel").value = "5";
+      applyFilters();
+      show("F05-COMMON");
     };
     document.getElementById("btnPipe").onclick = () => show("UTL-WTR-01");
     document.getElementById("btnDup").onclick = () => show("F05-U501-DUP");
@@ -264,6 +306,57 @@
       }).catch((err) => {
         card("Extract failed: " + err);
       });
+    };
+    document.getElementById("btnGj").onclick = () => {
+      card("Exporting legal GeoJSON footprints…");
+      fetch("/export/geojson").then((r) => {
+        if (!r.ok) throw new Error(r.status);
+        return r.blob();
+      }).then((blob) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "ulpin3d-kothrud-legal.geojson";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        card("Legal footprint GeoJSON (EPSG:4326). Proposed IDs, not official ULPIN. DUP omitted.");
+      }).catch((err) => {
+        card("GeoJSON export failed: " + err);
+      });
+    };
+    document.getElementById("btnGml").onclick = () => {
+      card("Exporting CityGML 2.0 LOD1 physical building…");
+      fetch("/export/citygml").then((r) => {
+        if (!r.ok) throw new Error(r.status);
+        return r.blob();
+      }).then((blob) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "ulpin3d-kothrud-lod1.gml";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        card(
+          "CityGML 2.0 LOD1 download started (physical building only).\n" +
+          "Not legal title. Proposed 3D ULPIN is not an official DoLR identifier.\n" +
+          "Legal volumes remain in PostGIS / GET /export/geojson."
+        );
+      }).catch((err) => {
+        card("CityGML export failed: " + err);
+      });
+    };
+    document.getElementById("btnNoPlans").onclick = () => {
+      card("Dropping unit plans → 3.0 m whole-floor DEGRADED prisms…");
+      fetch("/demo/degraded-no-plans", { method: "POST" }).then((r) => r.json()).then((v) => {
+        loadScene(
+          "DEGRADED (no floor plans)\n" + (v.whole_floor_units || []).join(", ") +
+          "\n" + (v.note || "") + "\nRestore plans to get Flat 501 back."
+        );
+      }).catch((err) => card("Degraded path failed: " + err));
+    };
+    document.getElementById("btnRestore").onclick = () => {
+      card("Restoring authored plans…");
+      fetch("/demo/seed", { method: "POST" }).then((r) => r.json()).then((v) => {
+        loadScene("Plans restored. " + v.spatial_units + " units. Click Parcel + parent, then Flat 501.");
+      }).catch((err) => card("Restore failed: " + err));
     };
   </script>
 </body>

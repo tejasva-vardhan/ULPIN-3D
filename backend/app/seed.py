@@ -39,7 +39,7 @@ def _insert_su(db: Session, **kw):
               topology_status, geom_hash, baunit_id
             ) VALUES (
               :id, :parent_id, :parent_ulpin, :su_class, :local_code, :version, :display_id,
-              'ACTIVE', ST_SetSRID(ST_GeomFromText(:wkt), 32643), :zmin, :zmax,
+              'ACTIVE', ST_SetSRID(ST_MakeValid(ST_GeomFromText(:wkt)), 32643), :zmin, :zmax,
               'SYNTHETIC', :confidence, :topology_status, :geom_hash, :baunit_id
             )
             """
@@ -53,7 +53,7 @@ def _insert_su(db: Session, **kw):
             "version": 1,
             "display_id": (
                 f"UNISSUED/{kw['local_code']}"
-                if kw.get("topology_status") == "INVALID"
+                if kw.get("topology_status") in ("INVALID", "DEGRADED")
                 else issue_display_id(PARENT_ULPIN, kw["su_class"], kw["local_code"])
             ),
             "wkt": kw["poly"].wkt,
@@ -79,13 +79,13 @@ def _extrude_all(db: Session) -> int:
             """
             UPDATE spatial_unit
             SET geom_3d = ST_SetSRID(
-                  ST_Translate(CG_Extrude(ST_Force2D(geom_2d), 0, 0, zmax - zmin), 0, 0, zmin),
+                  ST_Translate(CG_Extrude(ST_Force2D(ST_MakeValid(geom_2d)), 0, 0, zmax - zmin), 0, 0, zmin),
                   32643
                 ),
                 volume_m3 = CG_Volume(
                   CG_MakeSolid(
                     ST_SetSRID(
-                      ST_Translate(CG_Extrude(ST_Force2D(geom_2d), 0, 0, zmax - zmin), 0, 0, zmin),
+                      ST_Translate(CG_Extrude(ST_Force2D(ST_MakeValid(geom_2d)), 0, 0, zmax - zmin), 0, 0, zmin),
                       32643
                     )
                   )
@@ -94,6 +94,80 @@ def _extrude_all(db: Session) -> int:
         )
     )
     return db.execute(text("SELECT count(*) FROM spatial_unit WHERE geom_3d IS NOT NULL")).scalar()
+
+
+def degrade_without_plans(db: Session) -> dict:
+    """Height / 3.0 m whole-floor prisms. Plans missing → DEGRADED, no fake VALID."""
+    from shapely import wkt as shapely_wkt
+
+    b_wkt = db.execute(
+        text("SELECT ST_AsText(geom_2d) FROM spatial_unit WHERE su_class='BUILDING' LIMIT 1")
+    ).scalar()
+    if not b_wkt:
+        raise ValueError("seed the demo first")
+    poly = shapely_wkt.loads(b_wkt)
+    ba = db.execute(text("SELECT id FROM baunit LIMIT 1")).scalar()
+    db.execute(
+        text(
+            """
+            DELETE FROM validation_result WHERE spatial_unit_id IN (
+              SELECT id FROM spatial_unit
+              WHERE su_class IN ('UNIT','COMMON') OR local_code LIKE '%DUP%'
+            )
+            """
+        )
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM rrr WHERE spatial_unit_id IN (
+              SELECT id FROM spatial_unit
+              WHERE su_class IN ('UNIT','COMMON') OR local_code LIKE '%DUP%'
+            )
+            """
+        )
+    )
+    db.execute(
+        text(
+            "DELETE FROM spatial_unit WHERE su_class IN ('UNIT','COMMON') OR local_code LIKE '%DUP%'"
+        )
+    )
+    floors = db.execute(
+        text(
+            """
+            SELECT id, local_code, zmin, zmax
+            FROM spatial_unit WHERE su_class='FLOOR' ORDER BY zmin
+            """
+        )
+    ).mappings().all()
+    wholes = []
+    for fl in floors:
+        if float(fl["zmax"]) <= STOREY_M + 0.01:
+            continue
+        level = int(round(float(fl["zmax"]) / STOREY_M))
+        code = f"F{level:02d}-WHOLE"
+        _insert_su(
+            db,
+            id=uuid.uuid4(),
+            parent_id=fl["id"],
+            poly=poly,
+            su_class="UNIT",
+            local_code=code,
+            zmin=float(fl["zmin"]),
+            zmax=float(fl["zmax"]),
+            topology_status="DEGRADED",
+            confidence=0.35,
+            baunit_id=ba,
+        )
+        wholes.append(code)
+    extruded = _extrude_all(db)
+    db.execute(text("UPDATE building SET extraction_method = 'HEIGHT_3M_NO_PLANS'"))
+    return {
+        "mode": "DEGRADED_NO_PLANS",
+        "whole_floor_units": wholes,
+        "extruded_solids": extruded,
+        "note": "No floor plans: 3.0 m whole-floor prisms. Confidence dropped. No fake VALID. Proposed 3D ULPIN not issued.",
+    }
 
 
 def _write_demo_files(demo_dir: Path, features: list[dict], utility: LineString, ox: float, oy: float):

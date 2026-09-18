@@ -8,12 +8,13 @@ from sqlalchemy import text
 from app.config import settings
 from app.db import SessionLocal, engine
 from app.geo import CrsError, require_epsg, to_wgs_geojson
+from app.citygml_export import building_lod1_citygml
 from app.gltf_export import prisms_to_gltf
 from app.ingest import create_site, ingest_dataset, list_datasets, list_sites
 from app.issuer import issue_display_id
 from app.pipeline.extract import extract_footprint, iou
 from app.pipeline.synthetic_las import write_synthetic_las
-from app.seed import seed_demo
+from app.seed import degrade_without_plans, seed_demo
 from app.validate import run_validation
 from shapely import wkt as shapely_wkt
 import json
@@ -53,6 +54,23 @@ def demo_seed():
         result = seed_demo(db)
         db.commit()
         return result
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/demo/degraded-no-plans")
+def demo_degraded():
+    db = SessionLocal()
+    try:
+        result = degrade_without_plans(db)
+        db.commit()
+        return result
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         db.rollback()
         raise
@@ -213,6 +231,33 @@ def get_floors():
     return {"count": len(rows), "floors": rows}
 
 
+@app.get("/rrr")
+def get_rrr():
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT s.local_code, s.su_class, r.rrr_type, r.share, r.description,
+                       p.name AS party_name, p.party_type
+                FROM rrr r
+                JOIN spatial_unit s ON s.id = r.spatial_unit_id
+                JOIN party p ON p.id = r.party_id
+                ORDER BY s.local_code
+                """
+            )
+        ).mappings().all()
+        out = []
+        for r in rows:
+            rec = dict(r)
+            if rec.get("share") is not None:
+                rec["share"] = float(rec["share"])
+            out.append(rec)
+        return {"count": len(out), "rrr": out}
+    finally:
+        db.close()
+
+
 @app.post("/issue/{local_code}")
 def issue_unit(local_code: str):
     db = SessionLocal()
@@ -250,6 +295,9 @@ def issue_unit(local_code: str):
     except HTTPException:
         db.rollback()
         raise
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         db.rollback()
         raise
@@ -406,6 +454,83 @@ def model_gltf():
             raise HTTPException(status_code=404, detail="seed the demo first")
         body = prisms_to_gltf([dict(r) for r in rows])
         return Response(content=body, media_type="model/gltf+json")
+    finally:
+        db.close()
+
+
+@app.get("/export/citygml")
+def export_citygml():
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT local_code, display_id, parent_ulpin, geom_origin,
+                       zmin, zmax, ST_AsText(geom_2d) AS wkt
+                FROM spatial_unit WHERE su_class = 'BUILDING'
+                ORDER BY local_code LIMIT 1
+                """
+            )
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="seed the demo first")
+        xml = building_lod1_citygml(dict(row))
+        return Response(
+            content=xml.encode("utf-8"),
+            media_type="application/gml+xml",
+            headers={
+                "Content-Disposition": 'attachment; filename="ulpin3d-kothrud-lod1.gml"',
+                "X-ULPIN3D-Note": "physical CityGML LOD1; not legal title; proposed 3D ULPIN is not official",
+            },
+        )
+    finally:
+        db.close()
+
+
+@app.get("/export/geojson")
+def export_geojson():
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT display_id, su_class, local_code, parent_ulpin,
+                       zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
+                       ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
+                FROM spatial_unit
+                WHERE local_code NOT LIKE '%DUP%'
+                ORDER BY su_class, local_code
+                """
+            )
+        ).mappings().all()
+        if not rows:
+            raise HTTPException(status_code=404, detail="seed the demo first")
+        features = []
+        for r in rows:
+            geom = json.loads(r["geojson"]) if isinstance(r["geojson"], str) else r["geojson"]
+            props = {}
+            for k in r.keys():
+                if k == "geojson":
+                    continue
+                v = r[k]
+                if hasattr(v, "as_tuple"):
+                    v = float(v)
+                props[k] = v
+            props["not_official_ulpin"] = True
+            features.append({"type": "Feature", "properties": props, "geometry": geom})
+        body = {
+            "type": "FeatureCollection",
+            "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+            "name": "ULPIN-3D legal footprints (proposed, not official)",
+            "features": features,
+        }
+        return Response(
+            content=json.dumps(body).encode("utf-8"),
+            media_type="application/geo+json",
+            headers={
+                "Content-Disposition": 'attachment; filename="ulpin3d-kothrud-legal.geojson"',
+            },
+        )
     finally:
         db.close()
 

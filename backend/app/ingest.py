@@ -11,17 +11,16 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.geo import CrsError, require_epsg
+from app.issuer import assert_parent_ulpin
 
 STORAGE_EPSG = 32643
 
 
 def require_parent_ulpin(parent_ulpin: str | None) -> str:
-    if not parent_ulpin or not str(parent_ulpin).strip():
-        raise CrsError("parent_ulpin is required; do not invent an official ULPIN")
-    parent_ulpin = str(parent_ulpin).strip()
-    if len(parent_ulpin) != 14:
-        raise CrsError("parent_ulpin must be 14 characters (official ULPIN or labelled placeholder)")
-    return parent_ulpin
+    try:
+        return assert_parent_ulpin(parent_ulpin)
+    except ValueError as exc:
+        raise CrsError(str(exc)) from exc
 
 
 def _checksum(payload: str) -> str:
@@ -77,6 +76,12 @@ def ingest_dataset(db: Session, payload: dict, demo_dir: Path) -> dict:
     if not kind:
         raise CrsError("dataset kind is required")
     filename = payload.get("filename") or payload.get("path") or "upload.geojson"
+    lower = str(filename).lower()
+    if lower.endswith((".shp", ".shx", ".dbf", ".prj")):
+        raise CrsError(
+            "Shapefile is not parsed in this image. Send GeoJSON with an explicit EPSG. "
+            "CRS missing or guessed from .prj is refused."
+        )
     geojson = payload.get("geojson")
     if geojson is None:
         rel = payload.get("path") or payload.get("filename")
