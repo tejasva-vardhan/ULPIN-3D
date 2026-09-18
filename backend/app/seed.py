@@ -256,7 +256,7 @@ def seed_demo(db: Session) -> dict:
     unit_east = rect_from_origin(ox, oy, unit_e_x, by, unit_w, bh)
 
     z_ground, z_roof = 0.0, FLOORS * STOREY_M
-    ids = {k: uuid.uuid4() for k in ["parcel", "building", "ba", "assoc", "owner"]}
+    ids = {k: uuid.uuid4() for k in ["parcel", "building", "ba", "assoc", "owner", "water"]}
 
     db.execute(
         text("INSERT INTO party (id, party_type, name) VALUES (:id, 'association', 'Demo Apartment Association')"),
@@ -265,6 +265,10 @@ def seed_demo(db: Session) -> dict:
     db.execute(
         text("INSERT INTO party (id, party_type, name) VALUES (:id, 'person', 'Allottee A (synthetic)')"),
         {"id": ids["owner"]},
+    )
+    db.execute(
+        text("INSERT INTO party (id, party_type, name) VALUES (:id, 'organisation', 'Demo municipal water (synthetic)')"),
+        {"id": ids["water"]},
     )
     db.execute(
         text("INSERT INTO baunit (id, name, uid) VALUES (:id, 'Kothrud demo scheme', 'BA-PUNE-DEMO-01')"),
@@ -444,6 +448,18 @@ def seed_demo(db: Session) -> dict:
         zmax=-2.6,
         topology_status="VALID",
         confidence=0.6,
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO rrr (baunit_id, party_id, spatial_unit_id, rrr_type, share, description)
+            VALUES (
+              :ba, :p, :su, 'RESTRICTION', NULL,
+              'easement-style restriction for underground water main. Not a new statute. Depth assumed.'
+            )
+            """
+        ),
+        {"ba": ids["ba"], "p": ids["water"], "su": util_id},
     )
 
     run_id = uuid.uuid4()

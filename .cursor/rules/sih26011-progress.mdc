@@ -11,7 +11,7 @@ Chats: [SIH26011 specs](46e49794-fb4f-4cfb-828d-81d43662c038), [SIH26011 plan](d
 |---|---|
 | 0–11 | DONE. Freeze `sih26011-kothrud-v01`. Cesium vanilla. DUP INVALID only; 501 issues. |
 | 12 CityGML LOD1 export | CODE DONE locally: `GET /export/citygml` + `/export/geojson`. Not necessarily pushed. |
-| 14 Missing plans DEGRADED | DONE | F05-WHOLE DEGRADED UNISSUED; issue 409; seed restores 501; Parcel + parent button |
+| 15 Underground easement RRR | DONE | GET /rrr UTL-WTR-01 RESTRICTION; Cesium Underground card |
 
 **Not done / do not:** React rewrite, PointNet, live CORS client, CityGML-as-DB, SVAMITVA dumps, mint official ULPIN, extra repo markdown, screen recording in git.
 

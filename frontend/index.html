@@ -173,6 +173,8 @@
       }
       if (rec.su_class === "UTILITY") {
         extra = "\nUnderground utility prism. Depth assumed for demo (LOCAL_SITE). Not a new statute.";
+        const rr = rrrByCode[code];
+        if (rr) extra += "\nRRR " + rr.rrr_type + "  " + rr.party_name + "\n" + rr.description;
       }
       if (rec.topology_status === "DEGRADED") {
         extra += "\nDEGRADED: no floor plans. Height / 3.0 m whole-floor prism. No fake VALID. ID not issued.";
