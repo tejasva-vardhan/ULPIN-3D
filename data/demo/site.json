@@ -10,5 +10,12 @@
   "floors": 5,
   "geom_origin": "SYNTHETIC",
   "demo_freeze": "sih26011-kothrud-v01",
+  "gnss_cors": {
+    "method": "CORS",
+    "h_rmse_m": 0.05,
+    "v_rmse_m": 0.08,
+    "live_stream": false,
+    "note": "Operator-declared synthetic accuracy. Not a live CORS client. Not survey certification."
+  },
   "note": "Synthetic georeferenced Kothrud/Pune scene. Not official cadastral or ULPIN data."
 }

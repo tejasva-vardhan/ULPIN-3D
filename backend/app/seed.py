@@ -129,7 +129,7 @@ def degrade_without_plans(db: Session) -> dict:
     }
 
 
-def _write_demo_files(demo_dir: Path, features: list[dict], utility: LineString, ox: float, oy: float):
+def _write_demo_files(demo_dir: Path, features: list[dict], util_lines: list[tuple]):
     demo_dir.mkdir(parents=True, exist_ok=True)
     site = {
         "name": SITE_NAME,
@@ -143,6 +143,13 @@ def _write_demo_files(demo_dir: Path, features: list[dict], utility: LineString,
         "floors": FLOORS,
         "geom_origin": "SYNTHETIC",
         "demo_freeze": "sih26011-kothrud-v01",
+        "gnss_cors": {
+            "method": "CORS",
+            "h_rmse_m": 0.05,
+            "v_rmse_m": 0.08,
+            "live_stream": False,
+            "note": "Operator-declared synthetic accuracy. Not a live CORS client. Not survey certification.",
+        },
         "note": "Synthetic georeferenced Kothrud/Pune scene. Not official cadastral or ULPIN data.",
     }
     (demo_dir / "site.json").write_text(json.dumps(site, indent=2), encoding="utf-8")
@@ -171,26 +178,19 @@ def _write_demo_files(demo_dir: Path, features: list[dict], utility: LineString,
         )
     fc("parcel.geojson", by.get("PARCEL", []))
     fc("building.geojson", by.get("BUILDING", []))
-    fc("units.geojson", by.get("UNIT", []) + by.get("COMMON", []) + by.get("PARKING", []))
+    fc("units.geojson", by.get("UNIT", []) + by.get("COMMON", []) + by.get("PARKING", []) + by.get("AIR", []))
     fc("floors.geojson", by.get("FLOOR", []))
-    util_wgs = mapping(shp_transform(lambda x, y, z=None: utm_to_lonlat(x, y), utility))
-    fc(
-        "utilities.geojson",
-        [
+    util_feats = []
+    for line, props in util_lines:
+        util_wgs = mapping(shp_transform(lambda x, y, z=None: utm_to_lonlat(x, y), line))
+        util_feats.append(
             {
                 "type": "Feature",
-                "properties": {
-                    "local_code": "UTL-WTR-01",
-                    "su_class": "UTILITY",
-                    "diameter_m": 0.3,
-                    "zmin": -3.2,
-                    "zmax": -2.6,
-                    "assumed_depth": True,
-                },
+                "properties": props,
                 "geometry": util_wgs,
             }
-        ],
-    )
+        )
+    fc("utilities.geojson", util_feats)
     fc("overlap_error.geojson", by.get("OVERLAP", []))
     (demo_dir / "bad_no_crs.json").write_text(
         json.dumps({"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]}),
@@ -221,7 +221,7 @@ def seed_demo(db: Session) -> dict:
     unit_east = rect_from_origin(ox, oy, unit_e_x, by, unit_w, bh)
 
     z_ground, z_roof = 0.0, FLOORS * STOREY_M
-    ids = {k: uuid.uuid4() for k in ["parcel", "building", "ba", "assoc", "owner", "water"]}
+    ids = {k: uuid.uuid4() for k in ["parcel", "building", "ba", "assoc", "owner", "water", "sewer", "air"]}
 
     db.execute(
         text("INSERT INTO party (id, party_type, name) VALUES (:id, 'association', 'Demo Apartment Association')"),
@@ -234,6 +234,10 @@ def seed_demo(db: Session) -> dict:
     db.execute(
         text("INSERT INTO party (id, party_type, name) VALUES (:id, 'organisation', 'Demo municipal water (synthetic)')"),
         {"id": ids["water"]},
+    )
+    db.execute(
+        text("INSERT INTO party (id, party_type, name) VALUES (:id, 'organisation', 'Demo municipal sewer (synthetic)')"),
+        {"id": ids["sewer"]},
     )
     db.execute(
         text("INSERT INTO baunit (id, name, uid) VALUES (:id, 'Kothrud demo scheme', 'BA-PUNE-DEMO-01')"),
@@ -250,7 +254,17 @@ def seed_demo(db: Session) -> dict:
             "name": SITE_NAME,
             "ulpin": PARENT_ULPIN,
             "wkt": parcel.wkt,
-            "meta": json.dumps({"synthetic": True, "city": "Pune"}),
+            "meta": json.dumps({
+                "synthetic": True,
+                "city": "Pune",
+                "gnss_cors": {
+                    "method": "CORS",
+                    "h_rmse_m": 0.05,
+                    "v_rmse_m": 0.08,
+                    "live_stream": False,
+                    "note": "Operator-declared synthetic accuracy. Not a live CORS client.",
+                },
+            }),
         },
     )
     db.execute(
@@ -270,7 +284,7 @@ def seed_demo(db: Session) -> dict:
         su_class="PARCEL",
         local_code="LOT",
         zmin=-5.0,
-        zmax=z_roof + 3.0,
+        zmax=z_roof + 12.0,
         confidence=0.99,
         baunit_id=ids["ba"],
         topology_status="VALID",
@@ -427,8 +441,90 @@ def seed_demo(db: Session) -> dict:
         {"ba": ids["ba"], "p": ids["water"], "su": util_id},
     )
 
+    sewer = LineString(
+        [
+            (ox + 4.0, oy + 28.8),
+            (ox + 38.0, oy + 28.8),
+        ]
+    )
+    sewer_poly = rect_from_origin(ox, oy, 4.0, 28.5, 34.0, 0.6)
+    sewer_id = uuid.uuid4()
+    _insert_su(
+        db,
+        id=sewer_id,
+        parent_id=ids["parcel"],
+        poly=sewer_poly,
+        su_class="UTILITY",
+        local_code="UTL-SWR-01",
+        zmin=-4.4,
+        zmax=-3.8,
+        topology_status="VALID",
+        confidence=0.55,
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO rrr (baunit_id, party_id, spatial_unit_id, rrr_type, share, description)
+            VALUES (
+              :ba, :p, :su, 'RESTRICTION', NULL,
+              'easement-style restriction for underground sewer. Not a new statute. Depth assumed.'
+            )
+            """
+        ),
+        {"ba": ids["ba"], "p": ids["sewer"], "su": sewer_id},
+    )
+
+    _insert_su(
+        db,
+        id=ids["air"],
+        parent_id=ids["parcel"],
+        poly=building,
+        su_class="AIR",
+        local_code="AIR-B1",
+        zmin=z_roof,
+        zmax=z_roof + 10.0,
+        topology_status="VALID",
+        confidence=0.7,
+        baunit_id=ids["ba"],
+    )
+    features.append(
+        {
+            "kind": "AIR",
+            "poly": building,
+            "local_code": "AIR-B1",
+            "zmin": z_roof,
+            "zmax": z_roof + 10.0,
+            "note": "air-rights slab above authored roof. Proposed volume, not a title.",
+        }
+    )
+    util_lines = [
+        (
+            util,
+            {
+                "local_code": "UTL-WTR-01",
+                "su_class": "UTILITY",
+                "diameter_m": 0.3,
+                "zmin": -3.2,
+                "zmax": -2.6,
+                "assumed_depth": True,
+            },
+        ),
+        (
+            sewer,
+            {
+                "local_code": "UTL-SWR-01",
+                "su_class": "UTILITY",
+                "diameter_m": 0.3,
+                "zmin": -4.4,
+                "zmax": -3.8,
+                "assumed_depth": True,
+            },
+        ),
+    ]
+
     from app.validate import run_validation
 
+    extruded = extrude_units(db)
     validation = run_validation(db)
     valid_units = db.execute(text("""
         SELECT id, su_class, local_code, version FROM spatial_unit
@@ -439,9 +535,8 @@ def seed_demo(db: Session) -> dict:
         db.execute(text("UPDATE spatial_unit SET display_id = :display WHERE id = :id"),
                    {"display": display, "id": unit["id"]})
 
-    extruded = extrude_units(db)
     demo_dir = Path(settings.demo_dir)
-    _write_demo_files(demo_dir, features, util, ox, oy)
+    _write_demo_files(demo_dir, features, util_lines)
 
     n = db.execute(text("SELECT count(*) FROM spatial_unit")).scalar()
     return {
@@ -450,8 +545,12 @@ def seed_demo(db: Session) -> dict:
         "spatial_units": n,
         "extruded_solids": extruded,
         "overlap_hits": [f["detail"] for f in validation["findings"] if f["rule_code"] == "UNIT_OVERLAP"],
+        "duplicate_vol": [f["detail"] for f in validation["findings"] if f["rule_code"] == "DUPLICATE_VOL" and not f["passed"]],
         "flat_501": db.execute(text(
             "SELECT display_id FROM spatial_unit WHERE local_code = 'F05-U501'"
+        )).scalar_one(),
+        "air_rights": db.execute(text(
+            "SELECT display_id FROM spatial_unit WHERE local_code = 'AIR-B1'"
         )).scalar_one(),
         "demo_dir": str(demo_dir),
     }

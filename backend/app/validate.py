@@ -13,6 +13,7 @@ RULES = (
     "CRS_STORAGE", "Z_RANGE", "SIMPLE_2D", "PARENT_CONTAIN",
     "PARENT_Z", "PARENT_ACTIVE", "PARENT_VALID", "UNIT_OVERLAP",
     "FLOOR_GAP", "FLOOR_OVERLAP", "UTIL_Z_BELOW_GROUND",
+    "AIR_OVER_BUILDING", "UTIL_UNIT_CLASH", "DUPLICATE_VOL", "CLOSED_3D",
 )
 XY_TOLERANCE_M = 0.03
 Z_TOLERANCE_M = 0.05
@@ -121,6 +122,56 @@ def evaluate_units(rows: list[dict]) -> tuple[list[dict], dict]:
             add(row, "UTIL_Z_BELOW_GROUND", row["zmax"] < 0,
                 {"zmax": row["zmax"], "z_ref": "LOCAL_SITE"}, "WARN")
 
+    buildings = [r for r in rows if r["su_class"] == "BUILDING" and r["id"] in polygons and r["id"] in valid_z]
+    for row in rows:
+        if row["su_class"] != "AIR" or row["id"] not in polygons or row["id"] not in valid_z:
+            continue
+        ok = False
+        detail = {"reason": "no BUILDING in the same site covers this air-rights slab above roof"}
+        for b in buildings:
+            if row.get("site_id") != b.get("site_id"):
+                continue
+            if polygons[b["id"]].buffer(XY_TOLERANCE_M).covers(polygons[row["id"]]) and row["zmin"] >= b["zmax"] - Z_TOLERANCE_M:
+                ok = True
+                detail = {"building": b["local_code"], "building_zmax": b["zmax"]}
+                break
+        add(row, "AIR_OVER_BUILDING", ok, detail)
+
+    utilities = [r for r in rows if r["su_class"] == "UTILITY" and r["id"] in polygons and r["id"] in valid_z]
+    exclusive = [r for r in rows if r["su_class"] == "UNIT" and r["id"] in polygons and r["id"] in valid_z]
+    for util in utilities:
+        hits = []
+        for unit in exclusive:
+            if util.get("site_id") != unit.get("site_id"):
+                continue
+            height = min(util["zmax"], unit["zmax"]) - max(util["zmin"], unit["zmin"])
+            if height <= 0:
+                continue
+            volume = polygons[util["id"]].intersection(polygons[unit["id"]]).area * height
+            if volume > OVERLAP_TOLERANCE_M3:
+                hits.append({"unit": unit["local_code"], "overlap_m3": volume})
+        add(util, "UTIL_UNIT_CLASH", not hits, {"hits": hits}, "WARN")
+
+    hashes = {}
+    for row in rows:
+        digest = row.get("geom_hash")
+        if not digest:
+            continue
+        hashes.setdefault((row.get("site_id"), row["su_class"], digest), []).append(row)
+    for group in hashes.values():
+        if len(group) < 2:
+            continue
+        codes = [r["local_code"] for r in group]
+        for row in group:
+            add(row, "DUPLICATE_VOL", False, {"others": [c for c in codes if c != row["local_code"]]})
+
+    for row in rows:
+        if "volume_m3" not in row:
+            continue
+        volume = row.get("volume_m3")
+        solid_ok = bool(row.get("has_solid")) and volume is not None and math.isfinite(float(volume)) and float(volume) > 0
+        add(row, "CLOSED_3D", solid_ok, {"volume_m3": None if volume is None else float(volume)})
+
     statuses = {
         r["id"]: ("DEGRADED" if r["topology_status"] == "DEGRADED"
                   else "INVALID" if r["id"] in errors else "VALID")
@@ -134,6 +185,7 @@ def run_validation(db: Session) -> dict:
     db.execute(text("SELECT pg_advisory_xact_lock(26011)"))
     rows = db.execute(text("""
         SELECT id, site_id, su_class, local_code, parent_id, zmin, zmax, topology_status,
+               geom_hash, volume_m3, geom_3d IS NOT NULL AS has_solid,
                ST_AsText(geom_2d) AS wkt, ST_SRID(geom_2d) AS srid
         FROM spatial_unit WHERE status = 'ACTIVE' ORDER BY id FOR UPDATE
     """)).mappings().all()

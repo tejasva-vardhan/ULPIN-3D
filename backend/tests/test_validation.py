@@ -78,6 +78,33 @@ class ValidationTests(unittest.TestCase):
             unit("b", bounds=(0.996, 0, 2, 1))))
         self.assertEqual(statuses["a"], "INVALID")
 
+    def test_air_rights_sit_on_roof(self):
+        findings, statuses = evaluate_units(scene(
+            unit("air", su_class="AIR", parent_id="parcel", z=(15, 25), bounds=(-5, -5, 15, 15))))
+        self.assertEqual(statuses["air"], "VALID")
+        self.assertTrue(any(f["rule_code"] == "AIR_OVER_BUILDING" and f["passed"] for f in findings))
+
+    def test_air_rights_inside_the_building_fail(self):
+        _, statuses = evaluate_units(scene(
+            unit("air", su_class="AIR", parent_id="parcel", z=(3, 6), bounds=(-5, -5, 15, 15))))
+        self.assertEqual(statuses["air"], "INVALID")
+
+    def test_utility_clash_warns_without_blocking(self):
+        findings, statuses = evaluate_units(scene(
+            unit("a"),
+            unit("pipe", su_class="UTILITY", parent_id="parcel", z=(-1, 1), bounds=(0, 0, 2, 2))))
+        self.assertEqual(statuses["pipe"], "VALID")
+        clash = [f for f in findings if f["rule_code"] == "UTIL_UNIT_CLASH" and not f["passed"]]
+        self.assertEqual(len(clash), 1)
+        self.assertEqual(clash[0]["severity"], "WARN")
+
+    def test_duplicate_volume_hash_blocks_both(self):
+        _, statuses = evaluate_units(scene(
+            unit("a", geom_hash="same-vol"),
+            unit("b", bounds=(5, 5, 7, 7), geom_hash="same-vol")))
+        self.assertEqual(statuses["a"], "INVALID")
+        self.assertEqual(statuses["b"], "INVALID")
+
 
 if __name__ == "__main__":
     unittest.main()

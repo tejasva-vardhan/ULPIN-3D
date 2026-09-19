@@ -30,6 +30,30 @@
           ]
         ]
       }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "local_code": "UTL-SWR-01",
+        "su_class": "UTILITY",
+        "diameter_m": 0.3,
+        "zmin": -4.4,
+        "zmax": -3.8,
+        "assumed_depth": true
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            73.80773608433644,
+            18.507660481166045
+          ],
+          [
+            73.80805811947664,
+            18.507662510573514
+          ]
+        ]
+      }
     }
   ]
 }
