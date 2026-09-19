@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS survey (
   source_id uuid REFERENCES source_dataset(id)
 );
 
+ALTER TABLE survey ADD COLUMN IF NOT EXISTS evidence_ref text;
+CREATE UNIQUE INDEX IF NOT EXISTS survey_source_unique ON survey (source_id)
+  WHERE source_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS party (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   party_type text NOT NULL,

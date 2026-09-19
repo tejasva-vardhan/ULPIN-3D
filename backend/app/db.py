@@ -47,6 +47,8 @@ def ensure_schema() -> None:
         conn.execute(text("ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS site_id uuid REFERENCES site(id)"))
         conn.execute(text("ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS source_dataset_id uuid REFERENCES source_dataset(id)"))
         conn.execute(text("ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS source_feature_index int"))
+        conn.execute(text("ALTER TABLE survey ADD COLUMN IF NOT EXISTS evidence_ref text"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS survey_source_unique ON survey (source_id) WHERE source_id IS NOT NULL"))
 
         # Task 5: rights recording (evidence + claim vs. verified title) and
         # explicit geometry review, plus lifecycle reason/actor on withdrawal.
