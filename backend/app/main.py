@@ -33,7 +33,7 @@ from app.issuer import issue_display_id
 from app.pipeline.extract import extract_footprint, iou
 from app.pipeline.synthetic_las import write_synthetic_las
 from app.seed import degrade_without_plans, seed_demo
-from app.validate import run_validation
+from app.validate import run_validation, RULES
 from shapely import wkt as shapely_wkt
 import json
 
@@ -102,6 +102,43 @@ def health():
         capabilities = check_database(conn)
         n = conn.execute(text("SELECT count(*) FROM spatial_unit")).scalar()
     return {"ok": True, **capabilities, "spatial_units": n}
+
+
+@app.get("/capabilities")
+def capabilities():
+    """SIH26011 coverage. Proposed 3D ULPIN is not an official DoLR identifier."""
+    return {
+        "problem_id": "SIH26011",
+        "title": "3D ULPIN Generation and Vertical Property Mapping System",
+        "proposed_3d_ulpin": True,
+        "official_3d_ulpin": False,
+        "not_a_title": True,
+        "live_stream": False,
+        "demo_line": "Official ULPIN names the land. We name the volume.",
+        "identities": {
+            "surface_parcel": True,
+            "multi_storey_apartments": True,
+            "parking": True,
+            "common_areas": True,
+            "air_rights": True,
+            "underground_utilities": True,
+        },
+        "integrations": {
+            "gis_parcels_geojson": True,
+            "floor_plans_geojson": True,
+            "lidar_las_laz": True,
+            "dsm_dtm_geotiff": True,
+            "drone_orthophoto": "evidence-only GeoTIFF; no cadastral boundary inferred",
+            "gnss_cors": "operator-declared RMSE on the site; no live CORS client",
+        },
+        "automation": {
+            "building_extraction": "classical nDSM, not trained PointNet",
+            "floor_segmentation": "plans win; otherwise 3.0 m DEGRADED bands",
+            "vertical_delineation": "2D footprint extruded [zmin, zmax] SFCGAL prism",
+            "topology_validation": list(RULES),
+        },
+        "note": "Prototype for one block. Dataset on the SIH portal is empty. Synthetic Kothrud demo is labelled as such.",
+    }
 
 
 @app.post("/demo/seed")
@@ -918,7 +955,7 @@ def model_gltf():
                 """
                 SELECT local_code, zmin, zmax, ST_AsText(geom_2d) AS wkt
                 FROM spatial_unit
-                WHERE su_class IN ('UNIT','COMMON','PARKING','UTILITY')
+                WHERE su_class IN ('UNIT','COMMON','PARKING','UTILITY','AIR')
                   AND status = 'ACTIVE'
                   AND topology_status = 'VALID'
                 ORDER BY zmin, local_code
