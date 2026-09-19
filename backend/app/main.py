@@ -24,6 +24,8 @@ from app.geo import CrsError, require_epsg, to_wgs_geojson
 from app.citygml_export import building_lod1_citygml
 from app.gltf_export import prisms_to_gltf
 from app.ingest import create_site, ingest_dataset, list_datasets, list_sites, get_dataset, ImportConflict
+from app.imagery import orthophoto_path, register_orthophoto
+from app.survey import SurveyDeclaration, get_survey, record_survey
 from app.properties import process_dataset
 from app.pipeline.assets import KINDS, register_asset
 from app.pipeline.workflow import BuildingRequest, process_building_sources
@@ -178,6 +180,8 @@ def post_dataset(payload: dict):
     """Import GeoJSON without merging its features.
 
     Supply kind, geojson, epsg and site_id (from POST /sites) for construction.
+    Use kind=survey-control with 2D Point features for GNSS/CORS observations;
+    then attach reported accuracy with POST /datasets/{id}/survey.
     Optional filename, geom_origin and z_ref describe the source. Heights use
     LOCAL_SITE metres. Original features and properties remain retrievable.
     """
@@ -248,6 +252,37 @@ async def upload_elevation(
             path.unlink(missing_ok=True)
 
 
+@app.post('/datasets/imagery')
+async def upload_imagery(request: Request, site_id: UUID, filename: str,
+                         epsg: int | None = None):
+    """Upload a bounded, georeferenced RGB/RGBA drone GeoTIFF as source evidence."""
+    if Path(filename).suffix.lower() not in {'.tif', '.tiff'}:
+        raise CrsError('Drone orthophoto filename must end in .tif or .tiff')
+    root = Path(settings.upload_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / (uuid4().hex + Path(filename).suffix.lower())
+    keep = False
+    try:
+        size = 0
+        with path.open('xb') as handle:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > settings.max_upload_bytes:
+                    raise HTTPException(status_code=413, detail='Upload exceeds the configured size limit; crop to the site first')
+                handle.write(chunk)
+        if not size:
+            raise CrsError('Uploaded file is empty')
+        with SessionLocal() as db:
+            result = register_orthophoto(db, path, site_id=site_id,
+                                         filename=filename, epsg=epsg)
+            db.commit()
+        keep = not result['reused']
+        return result
+    finally:
+        if not keep:
+            path.unlink(missing_ok=True)
+
+
 @app.get("/datasets/{dataset_id}")
 def read_dataset(dataset_id: UUID):
     with SessionLocal() as db:
@@ -255,6 +290,34 @@ def read_dataset(dataset_id: UUID):
         if not row:
             raise HTTPException(status_code=404, detail="dataset not found")
         return row
+
+
+@app.get('/datasets/{dataset_id}/imagery')
+def read_imagery(dataset_id: UUID):
+    with SessionLocal() as db:
+        path, source = orthophoto_path(db, dataset_id, settings.upload_dir)
+    return FileResponse(path, media_type='image/tiff', filename=source['filename'])
+
+
+@app.post('/datasets/{dataset_id}/survey')
+def post_survey(dataset_id: UUID, declaration: SurveyDeclaration):
+    """Attach reported GNSS/CORS accuracy and evidence reference to control points.
+
+    This records provenance; it does not correct coordinates or certify a survey.
+    """
+    with SessionLocal() as db:
+        result = record_survey(db, dataset_id, declaration)
+        db.commit()
+        return result
+
+
+@app.get('/datasets/{dataset_id}/survey')
+def read_survey(dataset_id: UUID):
+    with SessionLocal() as db:
+        result = get_survey(db, dataset_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail='survey declaration not found')
+        return result
 
 
 @app.post("/datasets/{dataset_id}/process")

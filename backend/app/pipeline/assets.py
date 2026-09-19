@@ -99,7 +99,7 @@ def register_asset(db, path, *, site_id, kind, filename, geom_origin, z_ref, loc
 def asset_path(source, upload_dir):
     name = source['meta'].get('asset_name')
     if not name:
-        raise CrsError('Dataset is not an uploaded elevation file')
+        raise CrsError('Dataset is not an uploaded file asset')
     root = Path(upload_dir).resolve()
     path = (root / name).resolve()
     if path.parent != root or not path.is_file():
