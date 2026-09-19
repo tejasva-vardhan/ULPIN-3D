@@ -4,6 +4,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse
 from sqlalchemy import text
 
@@ -35,6 +36,11 @@ from shapely import wkt as shapely_wkt
 import json
 
 app = FastAPI(title="ULPIN-3D", version="0.1.0")
+frontend_dir = Path('/frontend')
+if not frontend_dir.exists():
+    frontend_dir = Path(__file__).resolve().parents[2] / 'frontend'
+if frontend_dir.exists():
+    app.mount('/assets', StaticFiles(directory=frontend_dir), name='assets')
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -61,10 +67,31 @@ def _startup_schema():
 
 @app.get("/")
 def home():
-    page = Path("/frontend/index.html")
+    page = frontend_dir / 'index.html'
     if page.exists():
         return FileResponse(page)
     return {"ok": True, "hint": "frontend/index.html not mounted"}
+
+
+@app.get('/demo')
+def demo_page():
+    return FileResponse(frontend_dir / 'demo.html')
+
+
+@app.get('/parties')
+def list_parties():
+    with SessionLocal() as db:
+        return {'parties': [dict(r) for r in db.execute(text(
+            'SELECT id, name, party_type FROM party ORDER BY name, id'
+        )).mappings()]}
+
+
+@app.get('/baunits')
+def list_baunits():
+    with SessionLocal() as db:
+        return {'baunits': [dict(r) for r in db.execute(text(
+            'SELECT id, name, uid FROM baunit ORDER BY name, id'
+        )).mappings()]}
 
 
 @app.get("/health")
@@ -258,7 +285,7 @@ def list_units(site_id: UUID | None = None):
         rows = db.execute(
             text(
                 """
-                SELECT id::text AS uuid, site_id::text AS site_id,
+                SELECT id::text AS uuid, parent_id::text AS parent_id, site_id::text AS site_id,
                        source_dataset_id::text AS source_dataset_id, source_feature_index,
                        display_id, su_class, local_code, parent_ulpin, version, status,
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
@@ -844,7 +871,7 @@ def model_gltf():
 
 
 @app.get("/export/citygml")
-def export_citygml():
+def export_citygml(site_id: UUID | None = None, building_id: UUID | None = None):
     db = SessionLocal()
     try:
         row = db.execute(
@@ -853,18 +880,20 @@ def export_citygml():
                 SELECT local_code, display_id, parent_ulpin, geom_origin,
                        zmin, zmax, ST_AsText(geom_2d) AS wkt
                 FROM spatial_unit WHERE su_class = 'BUILDING' AND status = 'ACTIVE'
+                AND (CAST(:site AS uuid) IS NULL OR site_id=:site)
+                  AND (CAST(:building AS uuid) IS NULL OR id=:building)
                 ORDER BY local_code LIMIT 1
                 """
-            )
+            ), {"site":site_id, "building":building_id}
         ).mappings().first()
         if not row:
-            raise HTTPException(status_code=404, detail="seed the demo first")
+            raise HTTPException(status_code=404, detail="No active building matches this selection")
         xml = building_lod1_citygml(dict(row))
         return Response(
             content=xml.encode("utf-8"),
             media_type="application/gml+xml",
             headers={
-                "Content-Disposition": 'attachment; filename="ulpin3d-kothrud-lod1.gml"',
+                "Content-Disposition": 'attachment; filename="ulpin3d-building-lod1.gml"',
                 "X-ULPIN3D-Note": "physical CityGML LOD1; not legal title; proposed 3D ULPIN is not official",
             },
         )
@@ -873,23 +902,24 @@ def export_citygml():
 
 
 @app.get("/export/geojson")
-def export_geojson():
+def export_geojson(site_id: UUID | None = None):
     db = SessionLocal()
     try:
         rows = db.execute(
             text(
                 """
-                SELECT display_id, su_class, local_code, parent_ulpin,
+                SELECT id::text AS uuid, site_id::text AS site_id, display_id, su_class, local_code, parent_ulpin,
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
                 WHERE topology_status = 'VALID' AND status = 'ACTIVE'
+                  AND (CAST(:site AS uuid) IS NULL OR site_id=:site)
                 ORDER BY su_class, local_code
                 """
-            )
+            ), {"site":site_id}
         ).mappings().all()
         if not rows:
-            raise HTTPException(status_code=404, detail="seed the demo first")
+            raise HTTPException(status_code=404, detail="No validated properties available for this selection")
         features = []
         for r in rows:
             geom = json.loads(r["geojson"]) if isinstance(r["geojson"], str) else r["geojson"]
@@ -906,14 +936,14 @@ def export_geojson():
         body = {
             "type": "FeatureCollection",
             "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
-            "name": "ULPIN-3D legal footprints (proposed, not official)",
+            "name": "ULPIN-3D validated footprints (proposed, not official)",
             "features": features,
         }
         return Response(
             content=json.dumps(body).encode("utf-8"),
             media_type="application/geo+json",
             headers={
-                "Content-Disposition": 'attachment; filename="ulpin3d-kothrud-legal.geojson"',
+                "Content-Disposition": 'attachment; filename="ulpin3d-validated.geojson"',
             },
         )
     finally:

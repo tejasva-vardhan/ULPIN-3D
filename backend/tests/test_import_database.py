@@ -167,5 +167,25 @@ class ImportDatabaseTests(unittest.TestCase):
             db.commit()
 
 
+    def test_exports_and_parent_links_are_site_scoped(self):
+        import json
+        from app.main import export_geojson, export_citygml
+        process_properties(UUID(self.upload()['id']))
+        other = self.make_site('98ZY76XW54VU32')
+        process_properties(UUID(self.upload(site=other)['id']))
+        rows = list_units(UUID(self.site['id']))['units']
+        building = next(r for r in rows if r['su_class']=='BUILDING')
+        floor = next(r for r in rows if r['su_class']=='FLOOR')
+        self.assertEqual(floor['parent_id'], building['uuid'])
+        exported = json.loads(export_geojson(UUID(self.site['id'])).body)
+        self.assertEqual(len(exported['features']),6)
+        self.assertEqual({f['properties']['site_id'] for f in exported['features']},{self.site['id']})
+        xml = export_citygml(UUID(self.site['id']),UUID(building['uuid'])).body.decode()
+        self.assertIn(self.site['parent_ulpin'],xml)
+        self.assertNotIn('Synthetic Kothrud',xml)
+        with self.assertRaises(HTTPException) as caught:
+            export_citygml(UUID(other['id']),UUID(building['uuid']))
+        self.assertEqual(caught.exception.status_code,404)
+
 if __name__ == '__main__':
     unittest.main()
