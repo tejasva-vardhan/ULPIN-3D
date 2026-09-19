@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .env
 *.las
+*.laz
+data/uploads/
 .idea/
 .vscode/
 postgres-data/

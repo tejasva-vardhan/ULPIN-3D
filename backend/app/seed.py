@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.geo import lonlat_to_utm, rect_from_origin, to_wgs_geojson, utm_to_lonlat
 from app.issuer import issue_display_id
+from app.solids import extrude_units
+from app.ingest import ImportConflict
 
 PARENT_ULPIN = "ULPIN14PLACE01"
 SITE_NAME = "Kothrud demo block (synthetic)"
@@ -50,12 +52,8 @@ def _insert_su(db: Session, **kw):
             "parent_ulpin": PARENT_ULPIN,
             "su_class": kw["su_class"],
             "local_code": kw["local_code"],
-            "version": 1,
-            "display_id": (
-                f"UNISSUED/{kw['local_code']}"
-                if kw.get("topology_status") in ("INVALID", "DEGRADED")
-                else issue_display_id(PARENT_ULPIN, kw["su_class"], kw["local_code"])
-            ),
+            "version": kw.get("version", 1),
+            "display_id": f"UNISSUED/{kw['id']}",
             "wkt": kw["poly"].wkt,
             "zmin": kw["zmin"],
             "zmax": kw["zmax"],
@@ -68,75 +66,28 @@ def _insert_su(db: Session, **kw):
     return kw["id"]
 
 
-def _extrude_all(db: Session) -> int:
-    has_sfcgal = db.execute(
-        text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='postgis_sfcgal')")
-    ).scalar()
-    if not has_sfcgal:
-        return 0
-    db.execute(
-        text(
-            """
-            UPDATE spatial_unit
-            SET geom_3d = ST_SetSRID(
-                  ST_Translate(CG_Extrude(ST_Force2D(ST_MakeValid(geom_2d)), 0, 0, zmax - zmin), 0, 0, zmin),
-                  32643
-                ),
-                volume_m3 = CG_Volume(
-                  CG_MakeSolid(
-                    ST_SetSRID(
-                      ST_Translate(CG_Extrude(ST_Force2D(ST_MakeValid(geom_2d)), 0, 0, zmax - zmin), 0, 0, zmin),
-                      32643
-                    )
-                  )
-                )
-            """
-        )
-    )
-    return db.execute(text("SELECT count(*) FROM spatial_unit WHERE geom_3d IS NOT NULL")).scalar()
-
-
 def degrade_without_plans(db: Session) -> dict:
     """Height / 3.0 m whole-floor prisms. Plans missing → DEGRADED, no fake VALID."""
     from shapely import wkt as shapely_wkt
 
+    db.execute(text("SELECT pg_advisory_xact_lock(26011)"))
+
     b_wkt = db.execute(
-        text("SELECT ST_AsText(geom_2d) FROM spatial_unit WHERE su_class='BUILDING' LIMIT 1")
+        text("SELECT ST_AsText(geom_2d) FROM spatial_unit WHERE su_class='BUILDING' AND status='ACTIVE' AND site_id IS NULL LIMIT 1")
     ).scalar()
     if not b_wkt:
         raise ValueError("seed the demo first")
     poly = shapely_wkt.loads(b_wkt)
     ba = db.execute(text("SELECT id FROM baunit LIMIT 1")).scalar()
-    db.execute(
-        text(
-            """
-            DELETE FROM validation_result WHERE spatial_unit_id IN (
-              SELECT id FROM spatial_unit
-              WHERE su_class IN ('UNIT','COMMON') OR local_code LIKE '%DUP%'
-            )
-            """
-        )
-    )
-    db.execute(
-        text(
-            """
-            DELETE FROM rrr WHERE spatial_unit_id IN (
-              SELECT id FROM spatial_unit
-              WHERE su_class IN ('UNIT','COMMON') OR local_code LIKE '%DUP%'
-            )
-            """
-        )
-    )
-    db.execute(
-        text(
-            "DELETE FROM spatial_unit WHERE su_class IN ('UNIT','COMMON') OR local_code LIKE '%DUP%'"
-        )
-    )
+    db.execute(text("""
+        UPDATE spatial_unit SET status = 'EXTINGUISHED', valid_to = now()
+        WHERE su_class IN ('UNIT', 'COMMON') AND status = 'ACTIVE' AND site_id IS NULL
+    """))
     floors = db.execute(
         text(
             """
             SELECT id, local_code, zmin, zmax
-            FROM spatial_unit WHERE su_class='FLOOR' ORDER BY zmin
+            FROM spatial_unit WHERE su_class='FLOOR' AND status='ACTIVE' AND site_id IS NULL ORDER BY zmin
             """
         )
     ).mappings().all()
@@ -146,6 +97,10 @@ def degrade_without_plans(db: Session) -> dict:
             continue
         level = int(round(float(fl["zmax"]) / STOREY_M))
         code = f"F{level:02d}-WHOLE"
+        version = db.execute(text("""
+            SELECT COALESCE(MAX(version), 0) + 1 FROM spatial_unit
+            WHERE parent_ulpin = :parent AND su_class = 'UNIT' AND local_code = :code
+        """), {"parent": PARENT_ULPIN, "code": code}).scalar_one()
         _insert_su(
             db,
             id=uuid.uuid4(),
@@ -153,6 +108,7 @@ def degrade_without_plans(db: Session) -> dict:
             poly=poly,
             su_class="UNIT",
             local_code=code,
+            version=version,
             zmin=float(fl["zmin"]),
             zmax=float(fl["zmax"]),
             topology_status="DEGRADED",
@@ -160,8 +116,11 @@ def degrade_without_plans(db: Session) -> dict:
             baunit_id=ba,
         )
         wholes.append(code)
-    extruded = _extrude_all(db)
-    db.execute(text("UPDATE building SET extraction_method = 'HEIGHT_3M_NO_PLANS'"))
+    extruded = extrude_units(db)
+    db.execute(text("""
+        UPDATE building SET extraction_method = 'HEIGHT_3M_NO_PLANS'
+        WHERE spatial_unit_id IN (SELECT id FROM spatial_unit WHERE site_id IS NULL)
+    """))
     return {
         "mode": "DEGRADED_NO_PLANS",
         "whole_floor_units": wholes,
@@ -240,6 +199,12 @@ def _write_demo_files(demo_dir: Path, features: list[dict], utility: LineString,
 
 
 def seed_demo(db: Session) -> dict:
+    db.execute(text("SELECT pg_advisory_xact_lock(26011)"))
+    if db.execute(text("""
+        SELECT EXISTS(SELECT 1 FROM source_dataset WHERE site_id IS NOT NULL OR meta ? 'source_geojson')
+            OR EXISTS(SELECT 1 FROM site WHERE meta->>'synthetic' IS DISTINCT FROM 'true')
+    """)).scalar():
+        raise ImportConflict("Demo reset is disabled while user-created sites or datasets exist; use a separate demo database.")
     db.execute(text("TRUNCATE validation_result, rrr, floor, building, spatial_unit, baunit, party, source_dataset, site CASCADE"))
 
     ox, oy = lonlat_to_utm(ORIGIN_LON, ORIGIN_LAT)
@@ -462,36 +427,19 @@ def seed_demo(db: Session) -> dict:
         {"ba": ids["ba"], "p": ids["water"], "su": util_id},
     )
 
-    run_id = uuid.uuid4()
-    overlap_hits = db.execute(
-        text(
-            """
-            SELECT a.local_code AS a, b.local_code AS b
-            FROM spatial_unit a
-            JOIN spatial_unit b ON a.id < b.id
-            WHERE a.su_class = 'UNIT' AND b.su_class = 'UNIT'
-              AND ST_Intersects(a.geom_2d, b.geom_2d)
-              AND a.zmin < b.zmax AND b.zmin < a.zmax
-            """
-        )
-    ).mappings().all()
-    db.execute(
-        text(
-            """
-            INSERT INTO validation_result (spatial_unit_id, run_id, rule_code, passed, severity, detail)
-            VALUES (:sid, :run, 'UNIT_OVERLAP', :passed, :sev, :detail)
-            """
-        ),
-        {
-            "sid": overlap_id,
-            "run": run_id,
-            "passed": len(overlap_hits) == 0,
-            "sev": "ERROR" if overlap_hits else "INFO",
-            "detail": json.dumps({"hits": [dict(h) for h in overlap_hits]}),
-        },
-    )
+    from app.validate import run_validation
 
-    extruded = _extrude_all(db)
+    validation = run_validation(db)
+    valid_units = db.execute(text("""
+        SELECT id, su_class, local_code, version FROM spatial_unit
+        WHERE status = 'ACTIVE' AND topology_status = 'VALID'
+    """)).mappings().all()
+    for unit in valid_units:
+        display = issue_display_id(PARENT_ULPIN, unit["su_class"], unit["local_code"], unit["version"])
+        db.execute(text("UPDATE spatial_unit SET display_id = :display WHERE id = :id"),
+                   {"display": display, "id": unit["id"]})
+
+    extruded = extrude_units(db)
     demo_dir = Path(settings.demo_dir)
     _write_demo_files(demo_dir, features, util, ox, oy)
 
@@ -501,7 +449,9 @@ def seed_demo(db: Session) -> dict:
         "parent_ulpin_note": "placeholder 14-char parent; not a government-issued ULPIN",
         "spatial_units": n,
         "extruded_solids": extruded,
-        "overlap_hits": [dict(h) for h in overlap_hits],
-        "flat_501": issue_display_id(PARENT_ULPIN, "UNIT", "F05-U501"),
+        "overlap_hits": [f["detail"] for f in validation["findings"] if f["rule_code"] == "UNIT_OVERLAP"],
+        "flat_501": db.execute(text(
+            "SELECT display_id FROM spatial_unit WHERE local_code = 'F05-U501'"
+        )).scalar_one(),
         "demo_dir": str(demo_dir),
     }

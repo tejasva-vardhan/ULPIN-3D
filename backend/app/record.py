@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import uuid
+from uuid import UUID
 from xml.sax.saxutils import escape
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.issuer import issue_display_id
+from app.geo import CrsError
 
 
 def ensure_derived_from(db: Session) -> None:
@@ -20,22 +21,85 @@ def ensure_derived_from(db: Session) -> None:
     )
 
 
-def fetch_record(db: Session, local_code: str) -> dict | None:
+class AmbiguousUnit(ValueError):
+    pass
+
+
+def active_unit_id(db: Session, local_code: str, site_id=None):
+    ids = db.execute(text("""
+        SELECT id FROM spatial_unit WHERE local_code = :code AND status = 'ACTIVE'
+          AND (CAST(:site AS uuid) IS NULL OR site_id = :site)
+        ORDER BY version DESC LIMIT 2
+    """), {"code": local_code, "site": site_id}).scalars().all()
+    if len(ids) > 1:
+        raise AmbiguousUnit("local_code is ambiguous; supply site_id")
+    return ids[0] if ids else None
+
+
+def resolve_unit_id(db: Session, payload: dict):
+    """Resolve a spatial_unit_id from an explicit UUID, or site_id + local_code.
+
+    An explicit spatial_unit_id may reference any status (so a superseded or
+    withdrawn version stays inspectable). A local_code lookup only resolves
+    the ACTIVE version and is site-scoped through active_unit_id, which
+    raises AmbiguousUnit rather than guessing across sites.
+    """
+    site_id = payload.get("site_id")
+    if site_id is not None:
+        try:
+            site_id = UUID(str(site_id))
+        except ValueError as exc:
+            raise CrsError("site_id must be a UUID") from exc
+    explicit = payload.get("spatial_unit_id")
+    if explicit not in (None, ""):
+        try:
+            uid = UUID(str(explicit))
+        except (ValueError, AttributeError) as exc:
+            raise CrsError("spatial_unit_id must be a UUID") from exc
+        exists = db.execute(text("SELECT site_id, local_code FROM spatial_unit WHERE id = :id"), {"id": uid}).mappings().first()
+        if not exists:
+            raise CrsError("spatial_unit_id does not identify an existing spatial unit")
+        if site_id is not None and exists["site_id"] != site_id:
+            raise CrsError("spatial_unit_id does not belong to site_id")
+        if payload.get("local_code") is not None and payload["local_code"] != exists["local_code"]:
+            raise CrsError("spatial_unit_id does not match local_code")
+        return uid
+    code = payload.get("local_code")
+    if not isinstance(code, str) or not code.strip():
+        raise CrsError("supply spatial_unit_id, or site_id and local_code")
+    uid = active_unit_id(db, code, site_id)
+    if uid is None:
+        raise CrsError(f"no active spatial unit found for local_code {code}")
+    return uid
+
+
+def active_children_count(db: Session, unit_id) -> int:
+    return db.execute(text("""
+        SELECT count(*) FROM spatial_unit WHERE parent_id = :id AND status = 'ACTIVE'
+    """), {"id": unit_id}).scalar_one()
+
+
+def fetch_record(db: Session, local_code: str | None = None, site_id=None, *, spatial_unit_id=None) -> dict | None:
+    unit_id = (resolve_unit_id(db, {"spatial_unit_id": spatial_unit_id, "site_id": site_id})
+               if spatial_unit_id else active_unit_id(db, local_code, site_id))
+    if unit_id is None:
+        return None
     row = db.execute(
         text(
             """
             SELECT id::text AS uuid, parent_id::text AS parent_id, derived_from::text AS derived_from,
                    parent_ulpin, su_class, local_code, version, display_id, status,
+                   status_reason, status_actor, review_required, baunit_id,
                    zmin, zmax, volume_m3, geom_origin, confidence, topology_status,
+                   site_id::text AS site_id, source_dataset_id::text AS source_dataset_id,
+                   source_feature_index,
                    ST_AsText(geom_2d) AS wkt_32643,
                    ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson_4326
             FROM spatial_unit
-            WHERE local_code = :code AND status = 'ACTIVE'
-            ORDER BY version DESC
-            LIMIT 1
+            WHERE id = :id
             """
         ),
-        {"code": local_code},
+        {"id": unit_id},
     ).mappings().first()
     if not row:
         return None
@@ -47,9 +111,12 @@ def fetch_record(db: Session, local_code: str) -> dict | None:
     rrr = db.execute(
         text(
             """
-            SELECT r.rrr_type, r.share, r.description, p.name AS party_name, p.party_type
+            SELECT r.id::text AS id, r.rrr_type, r.share, r.description,
+                   r.evidence_ref, r.claim_status, r.created_at,
+                   p.name AS party_name, p.party_type
             FROM rrr r JOIN party p ON p.id = r.party_id
             WHERE r.spatial_unit_id = :id
+            ORDER BY r.created_at
             """
         ),
         {"id": rec["uuid"]},
@@ -60,6 +127,32 @@ def fetch_record(db: Session, local_code: str) -> dict | None:
         if d.get("share") is not None:
             d["share"] = float(d["share"])
         rec["rrr"].append(d)
+    rec["reviews"] = [
+        dict(r)
+        for r in db.execute(
+            text(
+                """
+                SELECT id::text AS id, decision, reviewer_label, reason, evidence_ref,
+                       released_block, created_at
+                FROM spatial_unit_review WHERE spatial_unit_id = :id ORDER BY created_at
+                """
+            ),
+            {"id": rec["uuid"]},
+        ).mappings().all()
+    ]
+    rec["source"] = None
+    if rec["source_dataset_id"]:
+        source = db.execute(text("""
+            SELECT filename, checksum_sha256, epsg, z_ref,
+                   meta->'source_geojson' AS source_geojson,
+                   meta->'processing' AS processing, meta->'construction' AS construction
+            FROM source_dataset WHERE id = :id
+        """), {"id": rec["source_dataset_id"]}).mappings().one()
+        rec["source"] = {k: v for k, v in source.items() if k != "source_geojson"}
+        rec["source"]["construction"] = (source["construction"] or {}).get(str(rec["source_feature_index"]))
+        raw = source["source_geojson"]
+        original = raw["features"][rec["source_feature_index"]] if raw["type"] == "FeatureCollection" else raw
+        rec["source"]["feature"] = original
     rec["not_official_ulpin"] = True
     rec["not_a_title"] = True
     rec["note"] = (
@@ -94,6 +187,11 @@ def record_html(rec: dict) -> str:
             for r in rec["rrr"]
         )
         rrr_html = f"<ul>{bits}</ul>"
+    reviews_html = "".join(
+        f"<li>{escape(str(r['decision']))} · {escape(str(r['reviewer_label']))}"
+        f" · {escape(str(r['created_at']))} · {escape(str(r.get('reason') or ''))}"
+        f" · {escape(str(r.get('evidence_ref') or ''))}</li>" for r in rec.get('reviews', [])
+    ) or "<li>No review decisions recorded.</li>"
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
 <title>Record card · {escape(str(rec['local_code']))}</title>
@@ -110,50 +208,68 @@ def record_html(rec: dict) -> str:
 <div class="banner">PROPOSED 3D ULPIN — not an official DoLR identifier. This card is not a legal title.
 Official ULPIN names the land. We name the volume.</div>
 <h1>ULPIN-3D cadastral record card</h1>
-<p class="muted">Synthetic Kothrud/Pune demo. LADM-aligned exploration prototype.</p>
+<p class="muted">LADM-aligned exploration prototype. Geometry origin: {escape(str(rec["geom_origin"]))}.</p>
 <table>{body}</table>
 <h2>RRR</h2>
 {rrr_html}
+<h2>Geometry review history</h2><ul>{reviews_html}</ul>
 <p class="muted">{escape(rec['note'])}</p>
 </body></html>
 """
 
 
-def supersede_new_version(db: Session, local_code: str) -> dict:
-    """Legal event: new UUID + version. Parent ULPIN unchanged. Old row SUPERSEDED, never recycled."""
+def supersede_new_version(db: Session, local_code: str, site_id=None) -> dict:
+    """Legal event: new UUID + version. Parent ULPIN unchanged. Old row SUPERSEDED, never recycled.
+
+    The new version is created UNISSUED and re-validated on its own; it never
+    inherits an approval, review history or issued display_id that applied
+    only to the earlier version. Versioning is refused while active
+    dependent units still reference this one, rather than silently leaving
+    them pointed at a superseded parent.
+    """
     ensure_derived_from(db)
+    db.execute(text("SELECT pg_advisory_xact_lock(26011)"))
+    from app.validate import run_validation
+
+    run_validation(db)
+    unit_id = active_unit_id(db, local_code, site_id)
     old = db.execute(
         text(
             """
             SELECT id, parent_id, parent_ulpin, su_class, local_code, version,
                    display_id, topology_status, status, geom_origin, confidence, baunit_id
             FROM spatial_unit
-            WHERE local_code = :code AND status = 'ACTIVE'
-            ORDER BY version DESC LIMIT 1
+            WHERE id = :id
             """
         ),
-        {"code": local_code},
+        {"id": unit_id},
     ).mappings().first()
     if not old:
         raise ValueError("not found")
-    if "DUP" in str(old["local_code"]):
-        raise ValueError("INVALID overlap units cannot be versioned")
+    children = active_children_count(db, old["id"])
+    if children:
+        raise ValueError(
+            f"cannot create a new version while {children} active dependent unit(s) still "
+            "reference this one; withdraw them first"
+        )
     if old["topology_status"] != "VALID":
         raise ValueError("cannot version a unit that is not topology VALID")
     new_ver = int(old["version"]) + 1
     new_id = uuid.uuid4()
-    display = issue_display_id(old["parent_ulpin"], old["su_class"], old["local_code"], new_ver)
+    display = f"UNISSUED/{new_id}"
     db.execute(
         text(
             """
             INSERT INTO spatial_unit (
               id, parent_id, parent_ulpin, su_class, local_code, version, display_id,
               status, geom_2d, zmin, zmax, geom_3d, volume_m3, geom_origin, confidence,
-              topology_status, geom_hash, baunit_id, derived_from
+              topology_status, geom_hash, baunit_id, derived_from,
+              site_id, source_dataset_id, source_feature_index, review_required
             )
             SELECT :nid, parent_id, parent_ulpin, su_class, local_code, :ver, :did,
                    'ACTIVE', geom_2d, zmin, zmax, geom_3d, volume_m3, geom_origin, confidence,
-                   topology_status, geom_hash, baunit_id, :old
+                   CASE WHEN review_required THEN 'DEGRADED'::topology_status ELSE 'PENDING'::topology_status END, geom_hash, baunit_id, :old,
+                   site_id, source_dataset_id, source_feature_index, review_required
             FROM spatial_unit WHERE id = :old
             """
         ),
@@ -163,7 +279,7 @@ def supersede_new_version(db: Session, local_code: str) -> dict:
         text(
             """
             UPDATE spatial_unit
-            SET status = 'SUPERSEDED', valid_to = now()
+            SET status = 'SUPERSEDED', valid_to = now(), status_reason = 'superseded by new version'
             WHERE id = :old
             """
         ),
@@ -172,20 +288,90 @@ def supersede_new_version(db: Session, local_code: str) -> dict:
     db.execute(
         text(
             """
-            INSERT INTO rrr (baunit_id, party_id, spatial_unit_id, rrr_type, share, description)
-            SELECT baunit_id, party_id, :nid, rrr_type, share, description
+            INSERT INTO rrr (baunit_id, party_id, spatial_unit_id, rrr_type, share, description,
+                              evidence_ref, claim_status)
+            SELECT baunit_id, party_id, :nid, rrr_type, share, description, evidence_ref, claim_status
             FROM rrr WHERE spatial_unit_id = :old
             """
         ),
         {"nid": new_id, "old": old["id"]},
     )
+    db.execute(text("""
+        INSERT INTO building (spatial_unit_id, storeys_above, storeys_below, z_ground, z_roof, extraction_method)
+        SELECT :nid, storeys_above, storeys_below, z_ground, z_roof, extraction_method
+        FROM building WHERE spatial_unit_id=:old
+    """), {"nid":new_id, "old":old["id"]})
+    db.execute(text("""
+        INSERT INTO floor (spatial_unit_id, building_id, level_index, label)
+        SELECT :nid, building_id, level_index, label FROM floor WHERE spatial_unit_id=:old
+    """), {"nid":new_id, "old":old["id"]})
+    validation = run_validation(db)
+    new_status = db.execute(
+        text("SELECT topology_status FROM spatial_unit WHERE id = :id"), {"id": new_id}
+    ).scalar_one()
     return {
         "superseded_uuid": str(old["id"]),
         "superseded_display": old["display_id"],
         "new_uuid": str(new_id),
         "new_display": display,
+        "new_topology_status": new_status,
         "local_code": old["local_code"],
         "version": new_ver,
         "parent_ulpin": old["parent_ulpin"],
-        "note": "parent ULPIN unchanged. Old UUID not recycled. Proposed 3D ULPIN is not official.",
+        "validation_run_id": validation["run_id"],
+        "note": (
+            "parent ULPIN unchanged. Old UUID not recycled. New version is UNISSUED until "
+            "POST /issue/{local_code} is called explicitly; rights and prior review history "
+            "remain attached to their original spatial_unit_id, not copied forward as approvals."
+        ),
+    }
+
+
+def withdraw_unit(db: Session, local_code: str, site_id, reason, actor_label=None) -> dict:
+    """Withdraw the active version: status -> EXTINGUISHED. Never deletes rows.
+
+    Rejected while active dependent units still reference this one, so a
+    withdrawal cannot silently leave children pointed at a gone parent.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise CrsError("a withdrawal reason is required")
+    if actor_label is not None and not isinstance(actor_label, str):
+        raise CrsError("actor_label must be a string")
+    db.execute(text("SELECT pg_advisory_xact_lock(26011)"))
+    unit_id = active_unit_id(db, local_code, site_id)
+    if unit_id is None:
+        raise ValueError("not found")
+    row = db.execute(
+        text("""
+            SELECT id, display_id, local_code, su_class FROM spatial_unit WHERE id = :id FOR UPDATE
+        """),
+        {"id": unit_id},
+    ).mappings().one()
+    children = active_children_count(db, unit_id)
+    if children:
+        raise ValueError(
+            f"cannot withdraw while {children} active dependent unit(s) still reference this one; "
+            "withdraw them first"
+        )
+    db.execute(
+        text(
+            """
+            UPDATE spatial_unit
+            SET status = 'EXTINGUISHED', valid_to = now(), status_reason = :reason, status_actor = :actor
+            WHERE id = :id AND status = 'ACTIVE'
+            """
+        ),
+        {"id": unit_id, "reason": reason.strip(), "actor": actor_label},
+    )
+    from app.validate import run_validation
+
+    validation = run_validation(db)
+    return {
+        "withdrawn_uuid": str(row["id"]),
+        "display_id": row["display_id"],
+        "local_code": row["local_code"],
+        "reason": reason.strip(),
+        "actor_label": actor_label,
+        "validation_run_id": validation["run_id"],
+        "note": "status set to EXTINGUISHED. The row, its versions, rights and review history are preserved, not deleted.",
     }

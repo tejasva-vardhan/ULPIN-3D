@@ -31,13 +31,13 @@ def building_lod1_citygml(row: dict) -> str:
   xmlns:gml="http://www.opengis.net/gml"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://www.opengis.net/citygml/building/2.0 http://schemas.opengis.net/citygml/building/2.0/building.xsd">
-  <gml:name>ULPIN-3D Kothrud LOD1 physical export</gml:name>
+  <gml:name>ULPIN-3D LOD1 physical export</gml:name>
   <gml:description>Physical CityGML LOD1 only. Legal 3D spaces stay in PostGIS (LADM-aligned). Proposed 3D ULPIN is not an official DoLR identifier. Not cadastral title.</gml:description>
   <core:cityObjectMember>
     <bldg:Building gml:id="{gid}">
       <gml:name>{escape(str(row.get("local_code") or "B1"))}</gml:name>
-      <gml:description>Synthetic Kothrud demo building. geom_origin={escape(str(row.get("geom_origin") or ""))}</gml:description>
-      <gen:stringAttribute name="parent_ulpin_placeholder">
+      <gml:description>Building envelope. geom_origin={escape(str(row.get("geom_origin") or ""))}</gml:description>
+      <gen:stringAttribute name="parent_ulpin">
         <gen:value>{parent}</gen:value>
       </gen:stringAttribute>
       <gen:stringAttribute name="proposed_3d_ulpin_display">

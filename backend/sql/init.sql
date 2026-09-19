@@ -1,12 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-DO $$
-BEGIN
-  CREATE EXTENSION IF NOT EXISTS postgis_sfcgal;
-EXCEPTION WHEN OTHERS THEN
-  RAISE NOTICE 'postgis_sfcgal not available in this image: %', SQLERRM;
-END $$;
+CREATE EXTENSION IF NOT EXISTS postgis_sfcgal;
 
 DO $$ BEGIN
   CREATE TYPE su_class AS ENUM (
@@ -163,3 +158,50 @@ CREATE TABLE IF NOT EXISTS site (
   bbox       geometry(Polygon, 32643),
   meta       jsonb NOT NULL DEFAULT '{}'
 );
+
+-- Additive upgrades for existing databases as well as fresh installations.
+ALTER TABLE source_dataset ADD COLUMN IF NOT EXISTS site_id uuid REFERENCES site(id);
+ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS site_id uuid REFERENCES site(id);
+ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS source_dataset_id uuid REFERENCES source_dataset(id);
+ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS source_feature_index int;
+
+-- Task 5: rights recording (evidence + claim vs. verified title) and
+-- explicit geometry review, plus lifecycle reason/actor on withdrawal.
+ALTER TABLE rrr ADD COLUMN IF NOT EXISTS evidence_ref text;
+ALTER TABLE rrr ADD COLUMN IF NOT EXISTS claim_status text NOT NULL DEFAULT 'CLAIMED';
+ALTER TABLE rrr ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+
+DO $$ BEGIN
+  ALTER TABLE rrr ADD CONSTRAINT rrr_claim_status_chk CHECK (claim_status IN ('CLAIMED','VERIFIED'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE rrr ADD CONSTRAINT rrr_right_share_range_chk
+    CHECK (rrr_type <> 'RIGHT' OR share IS NULL OR (share > 0 AND share <= 1));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS status_reason text;
+ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS status_actor text;
+
+CREATE TABLE IF NOT EXISTS spatial_unit_review (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  spatial_unit_id  uuid NOT NULL REFERENCES spatial_unit(id),
+  decision         text NOT NULL,
+  reviewer_label   text NOT NULL,
+  reason           text,
+  evidence_ref     text,
+  released_block   boolean NOT NULL DEFAULT false,
+  created_at       timestamptz NOT NULL DEFAULT now()
+);
+
+DO $$ BEGIN
+  ALTER TABLE spatial_unit_review ADD CONSTRAINT su_review_decision_chk
+    CHECK (decision IN ('APPROVED','REJECTED'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS su_review_unit_idx ON spatial_unit_review (spatial_unit_id);
+
+ALTER TABLE spatial_unit ADD COLUMN IF NOT EXISTS review_required boolean NOT NULL DEFAULT false;
+UPDATE spatial_unit SET review_required=true WHERE NOT review_required AND
+    (topology_status='DEGRADED' OR EXISTS
+      (SELECT 1 FROM spatial_unit_review r WHERE r.spatial_unit_id=spatial_unit.id));

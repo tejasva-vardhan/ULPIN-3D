@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>ULPIN-3D demo</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Widgets/widgets.css" rel="stylesheet"/>
+  <style>
+    html, body, #cesiumContainer { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    #cesiumContainer { z-index: 0; }
+    #card {
+      position: absolute; top: 12px; left: 12px; z-index: 10000;
+      background: rgba(12,16,22,.92); color: #e8eef4; padding: 12px 14px;
+      width: 380px; font: 13px/1.4 Segoe UI, sans-serif; border-radius: 6px;
+      pointer-events: auto;
+    }
+    #card h1 { font-size: 14px; margin: 0 0 6px; }
+    #card .muted { color: #9aa7b5; font-size: 12px; }
+    #meta { margin-top: 8px; white-space: pre-wrap; }
+    button, select { margin: 4px 4px 0 0; }
+    label { font-size: 12px; color: #c5d0da; display: block; margin-top: 8px; }
+    input[type=range] { width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="card">
+    <h1>ULPIN-3D · Kothrud synthetic block</h1>
+    <div class="muted">Proposed 3D ULPIN under placeholder parent ULPIN14PLACE01. Not official. Official ULPIN names the land. We name the volume.</div>
+    <div>
+      <button id="btnPlay">Play demo</button>
+      <button id="btnParcel">Parcel + parent</button>
+      <button id="btn501">Flat 501</button>
+      <button id="btnCommon">COMMON corridor</button>
+      <button id="btnPipe">Underground</button>
+      <button id="btnDup">Show overlap error</button>
+      <button id="btnFix">Fix overlap</button>
+      <button id="btnVal">Run validation</button>
+      <button id="btnExt">Extract building</button>
+      <button id="btnRecord">Record card</button>
+      <button id="btnNewVer">New version</button>
+      <button id="btnGml">CityGML LOD1</button>
+      <button id="btnGj">Legal GeoJSON</button>
+      <button id="btnNoPlans">No floor plans</button>
+      <button id="btnRestore">Restore plans</button>
+    </div>
+    <label>Floor isolate
+      <select id="floorSel">
+        <option value="all">All floors</option>
+        <option value="1">1 / parking</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="5">5 (Flat 501)</option>
+      </select>
+    </label>
+    <label>Z-slice <span id="zLabel">all</span>
+      <input id="zSlice" type="range" min="-4" max="16" step="0.5" value="16"/>
+    </label>
+    <div id="meta" class="muted">Loading…</div>
+  </div>
+  <div id="cesiumContainer"></div>
+  <script>
+    const viewer = new Cesium.Viewer("cesiumContainer", {
+      baseLayerPicker: false,
+      animation: false,
+      timeline: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      navigationHelpButton: true,
+      fullscreenButton: true,
+      imageryProvider: new Cesium.TileMapServiceImageryProvider({
+        url: Cesium.buildModuleUrl("Assets/Textures/NaturalEarthII"),
+      }),
+      terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+    });
+    viewer.scene.globe.depthTestAgainstTerrain = false;
+    viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
+
+    const colors = {
+      PARCEL: Cesium.Color.YELLOW.withAlpha(0.18),
+      BUILDING: Cesium.Color.SLATEGRAY.withAlpha(0.18),
+      UNIT: Cesium.Color.CYAN.withAlpha(0.55),
+      COMMON: Cesium.Color.ORANGE.withAlpha(0.45),
+      PARKING: Cesium.Color.PURPLE.withAlpha(0.45),
+      UTILITY: Cesium.Color.LIME.withAlpha(0.85),
+    };
+
+    const units = [];
+    const rrrByCode = {};
+    let globeHidden = false;
+    let selectedCode = "F05-U501";
+    let demoPlaying = false;
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function setZSlice(val) {
+      const z = document.getElementById("zSlice");
+      z.value = String(val);
+      z.dispatchEvent(new Event("input"));
+    }
+
+    function parseGj(raw) {
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    }
+
+    function hierarchyFromGj(gj) {
+      const ring = gj.coordinates[0];
+      return ring.map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat));
+    }
+
+    function issuedLabel(u) {
+      const id = String(u.display_id || "");
+      if (u.topology_status !== "VALID") {
+        return "Issuance blocked (" + u.topology_status + ").";
+      }
+      if (id.startsWith("UNISSUED/")) {
+        return "Proposed 3D ULPIN not yet issued.";
+      }
+      return id;
+    }
+
+    function addUnit(u) {
+      const gj = parseGj(u.geojson);
+      if (!gj || !gj.coordinates) return;
+      const isDup = String(u.local_code).includes("DUP");
+      const color = u.topology_status === "INVALID" ? Cesium.Color.RED.withAlpha(0.8) : (colors[u.su_class] || Cesium.Color.WHITE.withAlpha(0.3));
+      const e = viewer.entities.add({
+        id: u.uuid || u.local_code,
+        name: u.display_id,
+        show: !isDup && u.su_class !== "FLOOR",
+        polygon: {
+          hierarchy: hierarchyFromGj(gj),
+          height: Number(u.zmin),
+          extrudedHeight: Number(u.zmax),
+          material: color,
+          outline: true,
+          outlineColor: Cesium.Color.WHITE,
+        },
+      });
+      units.push({ entity: e, rec: u, isDup });
+    }
+
+    function applyFilters() {
+      const floor = document.getElementById("floorSel").value;
+      const zCut = parseFloat(document.getElementById("zSlice").value);
+      const zAll = zCut >= 16;
+      document.getElementById("zLabel").textContent = zAll ? "all" : ("z ≤ " + zCut + " m");
+      const selected = viewer.selectedEntity && viewer.selectedEntity.id;
+      units.forEach(({ entity, rec, isDup }) => {
+        if (rec.su_class === "FLOOR") { entity.show = false; return; }
+        if (isDup && selected !== entity.id) { entity.show = false; return; }
+        let ok = true;
+        if (floor !== "all") {
+          if (rec.su_class === "BUILDING") ok = false;
+          if (["UNIT", "COMMON", "PARKING"].includes(rec.su_class)) {
+            const fl = Math.ceil(Number(rec.zmax) / 3);
+            ok = String(fl) === floor;
+          }
+        }
+        if (ok && !zAll && rec.su_class !== "UTILITY") ok = Number(rec.zmin) <= zCut;
+        if (!zAll && rec.su_class === "BUILDING") ok = false;
+        entity.show = !!ok && !(isDup && selected !== entity.id);
+      });
+    }
+
+    function setGlobe(show) {
+      globeHidden = !show;
+      viewer.scene.globe.show = show;
+    }
+
+    function card(text) {
+      document.getElementById("meta").textContent = text;
+    }
+
+    function show(code) {
+      const found = units.find((u) => u.rec.local_code === code);
+      if (!found) return;
+      selectedCode = code;
+      const { entity, rec } = found;
+      entity.show = true;
+      viewer.selectedEntity = entity;
+      if (code === "UTL-WTR-01") setGlobe(false);
+      else setGlobe(true);
+      let extra = "";
+      if (rec.su_class === "COMMON") {
+        const rr = rrrByCode[code];
+        extra = "\nCOMMON is association undivided share (RERA-style, synthetic). Not a private title.";
+        if (rr) extra += "\nRRR " + rr.rrr_type + " share " + rr.share + "  " + rr.party_name + "\n" + rr.description;
+      }
+      if (rec.su_class === "UTILITY") {
+        extra = "\nUnderground utility prism. Depth assumed for demo (LOCAL_SITE). Not a new statute.";
+        const rr = rrrByCode[code];
+        if (rr) extra += "\nRRR " + rr.rrr_type + "  " + rr.party_name + "\n" + rr.description;
+      }
+      if (rec.topology_status === "DEGRADED") {
+        extra += "\nDEGRADED: no floor plans. Height / 3.0 m whole-floor prism. No fake VALID. ID not issued.";
+      }
+      card(
+        issuedLabel(rec) +
+        "\nclass " + rec.su_class + "  z " + rec.zmin + "–" + rec.zmax +
+        " m\nvolume " + Number(rec.volume_m3 || 0).toFixed(1) + " m³  topology " + rec.topology_status +
+        "\norigin " + rec.geom_origin + "  parent " + rec.parent_ulpin +
+        "\nconfidence " + rec.confidence + extra
+      );
+      applyFilters();
+      entity.show = true;
+      lookAtSite(code === "UTL-WTR-01" ? 55 : 80);
+    }
+
+    function lookAtSite(rangeM) {
+      const center = Cesium.Cartesian3.fromDegrees(73.80785, 18.50750, 8);
+      const transform = Cesium.Transforms.eastNorthUpToFixedFrame(center);
+      viewer.camera.lookAtTransform(
+        transform,
+        new Cesium.HeadingPitchRange(
+          Cesium.Math.toRadians(35),
+          Cesium.Math.toRadians(-32),
+          rangeM || 90
+        )
+      );
+    }
+
+    function loadScene(msg) {
+      units.forEach((u) => viewer.entities.remove(u.entity));
+      units.length = 0;
+      Object.keys(rrrByCode).forEach((k) => { delete rrrByCode[k]; });
+      const extract = viewer.entities.getById("EXTRACT");
+      if (extract) viewer.entities.remove(extract);
+      return Promise.all([
+        fetch("/spatial-units").then((r) => r.json()),
+        fetch("/rrr").then((r) => r.json()).catch(() => ({ rrr: [] })),
+      ]).then(([data, rr]) => {
+        (rr.rrr || []).forEach((row) => { rrrByCode[row.local_code] = row; });
+        data.units.forEach(addUnit);
+        applyFilters();
+        lookAtSite();
+        if (msg) card(msg);
+        else card(data.count + " spatial units loaded. Click Parcel + parent, then Flat 501.");
+      });
+    }
+    loadScene();
+
+    document.getElementById("btnParcel").onclick = () => {
+      document.getElementById("floorSel").value = "all";
+      applyFilters();
+      show("LOT");
+    };
+    document.getElementById("btn501").onclick = () => {
+      document.getElementById("floorSel").value = "5";
+      applyFilters();
+      show("F05-U501");
+    };
+    document.getElementById("btnCommon").onclick = () => {
+      document.getElementById("floorSel").value = "5";
+      applyFilters();
+      show("F05-COMMON");
+    };
+    document.getElementById("btnPipe").onclick = () => show("UTL-WTR-01");
+    document.getElementById("btnDup").onclick = () => show("F05-U501-DUP");
+    document.getElementById("btnFix").onclick = () => {
+      card("Withdrawing seeded overlap…");
+      fetch("/demo/fix-overlap", { method: "POST" }).then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.detail || r.status);
+        return body;
+      }).then(async (v) => {
+        await loadScene();
+        document.getElementById("floorSel").value = "5";
+        show("F05-U501");
+        const rec = v.flat_501 || {};
+        card("Overlap withdrawn\n" + (rec.display_id || "") +
+          "\ntopology " + rec.topology_status + "\n" + (v.note || ""));
+      }).catch((err) => card("Fix failed: " + err));
+    };
+    document.getElementById("floorSel").onchange = applyFilters;
+    document.getElementById("zSlice").oninput = applyFilters;
+    document.getElementById("btnVal").onclick = () => {
+      fetch("/validate", { method: "POST" }).then((r) => r.json()).then(async (v) => {
+        await loadScene();
+        const fails = v.findings.filter((f) => !f.passed);
+        card(
+          "Validation errors: " + v.error_count + " / " + v.finding_count + " checks\n" +
+          fails.map((f) => f.rule_code + " " + JSON.stringify(f.detail)).join("\n")
+        );
+      });
+    };
+    document.getElementById("btnExt").onclick = () => {
+      runExtract();
+    };
+
+    function runExtract() {
+      card("Extracting nDSM footprint…");
+      return fetch("/demo/process/building", { method: "POST" }).then((r) => r.json()).then((v) => {
+        const old = viewer.entities.getById("EXTRACT");
+        if (old) viewer.entities.remove(old);
+        if (v.geojson) {
+          const gj = parseGj(v.geojson);
+          viewer.entities.add({
+            id: "EXTRACT",
+            name: "nDSM extract (not legal)",
+            polygon: {
+              hierarchy: hierarchyFromGj(gj),
+              height: 0,
+              extrudedHeight: 0.4,
+              material: Cesium.Color.YELLOW.withAlpha(0.55),
+              outline: true,
+              outlineColor: Cesium.Color.YELLOW,
+            },
+          });
+        }
+        card(
+          "Classical nDSM extract (not legal title)\npoints " + v.las.n_points +
+          "  IoU vs authored building " + Number(v.iou_vs_authored_building).toFixed(3) +
+          "\n" + v.note
+        );
+        lookAtSite();
+        return v;
+      }).catch((err) => {
+        card("Extract failed: " + err);
+      });
+    }
+    document.getElementById("btnGj").onclick = () => {
+      card("Exporting legal GeoJSON footprints…");
+      fetch("/export/geojson").then((r) => {
+        if (!r.ok) throw new Error(r.status);
+        return r.blob();
+      }).then((blob) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "ulpin3d-kothrud-legal.geojson";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        card("Legal footprint GeoJSON (EPSG:4326). Validated footprints only. Proposed IDs, not official ULPIN.");
+      }).catch((err) => {
+        card("GeoJSON export failed: " + err);
+      });
+    };
+    document.getElementById("btnGml").onclick = () => {
+      card("Exporting CityGML 2.0 LOD1 physical building…");
+      fetch("/export/citygml").then((r) => {
+        if (!r.ok) throw new Error(r.status);
+        return r.blob();
+      }).then((blob) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "ulpin3d-kothrud-lod1.gml";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        card(
+          "CityGML 2.0 LOD1 download started (physical building only).\n" +
+          "Not legal title. Proposed 3D ULPIN is not an official DoLR identifier.\n" +
+          "Legal volumes remain in PostGIS / GET /export/geojson."
+        );
+      }).catch((err) => {
+        card("CityGML export failed: " + err);
+      });
+    };
+    document.getElementById("btnNoPlans").onclick = () => {
+      card("Dropping unit plans → 3.0 m whole-floor DEGRADED prisms…");
+      fetch("/demo/degraded-no-plans", { method: "POST" }).then((r) => r.json()).then((v) => {
+        loadScene(
+          "DEGRADED (no floor plans)\n" + (v.whole_floor_units || []).join(", ") +
+          "\n" + (v.note || "") + "\nRestore plans to get Flat 501 back."
+        );
+      }).catch((err) => card("Degraded path failed: " + err));
+    };
+    document.getElementById("btnRestore").onclick = () => {
+      card("Restoring authored plans…");
+      fetch("/demo/seed", { method: "POST" }).then((r) => r.json()).then((v) => {
+        loadScene("Plans restored. " + v.spatial_units + " units. Click Parcel + parent, then Flat 501.");
+      }).catch((err) => card("Restore failed: " + err));
+    };
+
+    document.getElementById("btnRecord").onclick = () => {
+      const code = selectedCode || "F05-U501";
+      window.open("/record/" + encodeURIComponent(code) + "/html", "_blank");
+      fetch("/record/" + encodeURIComponent(code)).then((r) => {
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      }).then((rec) => {
+        card(
+          "Record card (not a title)\n" + rec.display_id +
+          "\nUUID " + rec.uuid +
+          "\nparent " + rec.parent_ulpin + "  v" + String(rec.version).padStart(2, "0") +
+          "\nWKT stored EPSG:32643\n" + (rec.wkt_32643 || "") +
+          "\nProposed 3D ULPIN is not official."
+        );
+      }).catch((err) => card("Record card failed: " + err));
+    };
+
+    document.getElementById("btnNewVer").onclick = () => {
+      const code = selectedCode && !String(selectedCode).includes("DUP") ? selectedCode : "F05-U501";
+      card("Legal event: new UUID + version. Parent ULPIN unchanged…");
+      fetch("/units/" + encodeURIComponent(code) + "/new-version", { method: "POST" }).then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.detail || r.status);
+        return body;
+      }).then((v) => {
+        loadScene(
+          "New version (not a recycled ID)\n" + v.new_display +
+          "\nsuperseded " + v.superseded_uuid +
+          "\nnew UUID " + v.new_uuid +
+          "\nparent ULPIN unchanged: " + v.parent_ulpin +
+          "\n" + (v.note || "")
+        );
+        selectedCode = v.local_code;
+      }).catch((err) => card("New version failed: " + err));
+    };
+
+    document.getElementById("btnPlay").onclick = async () => {
+      if (demoPlaying) return;
+      demoPlaying = true;
+      try {
+        setZSlice(16);
+        document.getElementById("floorSel").value = "all";
+        applyFilters();
+        show("LOT");
+        card("Demo 1/7 · Parcel. Official ULPIN names the land. We name the volume.\nParent placeholder ULPIN14PLACE01. Proposed 3D ULPIN is not official.");
+        await sleep(3200);
+        card("Demo 2/7 · Classical nDSM extract. AI_DERIVED, not legal title.");
+        await runExtract();
+        await sleep(2800);
+        document.getElementById("floorSel").value = "5";
+        applyFilters();
+        show("F05-U501");
+        card("Demo 3/7 · Flat 501 volume under parent ULPIN14PLACE01.\nProposed display IN-ULPIN3D/…/UNIT/F05-U501/vNN. Not official.");
+        await sleep(3200);
+        show("F05-COMMON");
+        card("Demo 4/7 · COMMON corridor. Undivided share (RERA-style, synthetic). Not a private title.");
+        await sleep(2800);
+        setZSlice(9);
+        card("Demo 5/7 · Z-slice. Legal solids clipped by LOCAL_SITE height.");
+        await sleep(2800);
+        setZSlice(16);
+        show("UTL-WTR-01");
+        card("Demo 6/7 · Underground water main. Corridor solid + easement-style RESTRICTION. Not a new statute.");
+        await sleep(3200);
+        show("F05-U501-DUP");
+        card(
+          "Demo 7/7 · Seeded overlap INVALID. ID blocked. Do not issue.\n" +
+          "Play demo stops here so judges see INVALID. Click Fix overlap when ready."
+        );
+      } finally {
+        demoPlaying = false;
+      }
+    };
+  </script>
+</body>
+</html>
