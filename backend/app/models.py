@@ -33,11 +33,17 @@ class SpatialUnit(Base):
     id = Column(UUID(as_uuid=True), primary_key=True)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("spatial_unit.id"))
     parent_ulpin = Column(Text)
+    site_id = Column(UUID(as_uuid=True), ForeignKey("site.id"))
+    source_dataset_id = Column(UUID(as_uuid=True), ForeignKey("source_dataset.id"))
+    source_feature_index = Column(Integer)
     su_class = Column(Enum(name="su_class"), nullable=False)
     local_code = Column(Text, nullable=False)
     version = Column(Integer, nullable=False, default=1)
     display_id = Column(Text, nullable=False, unique=True)
     status = Column(Enum(name="object_status"), nullable=False, default="ACTIVE")
+    review_required = Column(Boolean, nullable=False, server_default=text("false"))
+    status_reason = Column(Text)
+    status_actor = Column(Text)
     geom_2d = Column(Geometry("POLYGON", srid=32643), nullable=False)
     zmin = Column(Float, nullable=False)
     zmax = Column(Float, nullable=False)
@@ -48,6 +54,7 @@ class SpatialUnit(Base):
     topology_status = Column(Enum(name="topology_status"), nullable=False, default="PENDING")
     geom_hash = Column(Text)
     baunit_id = Column(UUID(as_uuid=True), ForeignKey("baunit.id"))
+    derived_from = Column(UUID(as_uuid=True), ForeignKey("spatial_unit.id"))
     valid_from = Column(DateTime(timezone=True), server_default=func.now())
     valid_to = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -97,11 +104,33 @@ class RRR(Base):
     rrr_type = Column(Enum(name="rrr_type"), nullable=False)
     share = Column(Numeric)
     description = Column(Text)
+    evidence_ref = Column(Text)
+    claim_status = Column(Text, nullable=False, default="CLAIMED")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class SpatialUnitReview(Base):
+    """Explicit review decision for one spatial_unit version's estimated geometry.
+
+    Kept separate from validation_result (deterministic topology findings):
+    this table records a human/operator decision, never a rule outcome.
+    """
+
+    __tablename__ = "spatial_unit_review"
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    spatial_unit_id = Column(UUID(as_uuid=True), ForeignKey("spatial_unit.id"), nullable=False)
+    decision = Column(Text, nullable=False)
+    reviewer_label = Column(Text, nullable=False)
+    reason = Column(Text)
+    evidence_ref = Column(Text)
+    released_block = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class SourceDataset(Base):
     __tablename__ = "source_dataset"
     id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    site_id = Column(UUID(as_uuid=True), ForeignKey("site.id"))
     kind = Column(Text, nullable=False)
     filename = Column(Text, nullable=False)
     checksum_sha256 = Column(Text, nullable=False)

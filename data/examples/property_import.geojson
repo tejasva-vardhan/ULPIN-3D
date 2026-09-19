@@ -1,0 +1,244 @@
+{
+  "type": "FeatureCollection",
+  "description": "Synthetic import example. EPSG:32643, LOCAL_SITE metres. Parcel Z limits are an explicit demo envelope, not legal rights.",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "LOT",
+      "properties": {
+        "local_code": "LOT",
+        "su_class": "PARCEL",
+        "zmin": -5,
+        "zmax": 6,
+        "geom_origin": "SYNTHETIC"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              500030.0,
+              2050000.0
+            ],
+            [
+              500030.0,
+              2050020.0
+            ],
+            [
+              500000.0,
+              2050020.0
+            ],
+            [
+              500000.0,
+              2050000.0
+            ],
+            [
+              500030.0,
+              2050000.0
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "B1",
+      "properties": {
+        "local_code": "B1",
+        "su_class": "BUILDING",
+        "zmin": 0,
+        "zmax": 3,
+        "geom_origin": "SYNTHETIC",
+        "parent_code": "LOT"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              500022.0,
+              2050002.0
+            ],
+            [
+              500022.0,
+              2050012.0
+            ],
+            [
+              500002.0,
+              2050012.0
+            ],
+            [
+              500002.0,
+              2050002.0
+            ],
+            [
+              500022.0,
+              2050002.0
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "F1",
+      "properties": {
+        "local_code": "F1",
+        "su_class": "FLOOR",
+        "zmin": 0,
+        "zmax": 3,
+        "geom_origin": "SYNTHETIC",
+        "level_index": 1,
+        "label": "Ground",
+        "parent_code": "B1"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              500022.0,
+              2050002.0
+            ],
+            [
+              500022.0,
+              2050012.0
+            ],
+            [
+              500002.0,
+              2050012.0
+            ],
+            [
+              500002.0,
+              2050002.0
+            ],
+            [
+              500022.0,
+              2050002.0
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "U1",
+      "properties": {
+        "local_code": "U1",
+        "su_class": "UNIT",
+        "zmin": 0,
+        "zmax": 3,
+        "geom_origin": "SYNTHETIC",
+        "name": "West apartment",
+        "parent_code": "F1"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              500011.0,
+              2050002.0
+            ],
+            [
+              500011.0,
+              2050012.0
+            ],
+            [
+              500002.0,
+              2050012.0
+            ],
+            [
+              500002.0,
+              2050002.0
+            ],
+            [
+              500011.0,
+              2050002.0
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "U2",
+      "properties": {
+        "local_code": "U2",
+        "su_class": "UNIT",
+        "zmin": 0,
+        "zmax": 3,
+        "geom_origin": "SYNTHETIC",
+        "name": "East apartment",
+        "parent_code": "F1"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              500022.0,
+              2050002.0
+            ],
+            [
+              500022.0,
+              2050012.0
+            ],
+            [
+              500013.0,
+              2050012.0
+            ],
+            [
+              500013.0,
+              2050002.0
+            ],
+            [
+              500022.0,
+              2050002.0
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "C1",
+      "properties": {
+        "local_code": "C1",
+        "su_class": "COMMON",
+        "zmin": 0,
+        "zmax": 3,
+        "geom_origin": "SYNTHETIC",
+        "name": "Shared corridor",
+        "parent_code": "F1"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              500013.0,
+              2050002.0
+            ],
+            [
+              500013.0,
+              2050012.0
+            ],
+            [
+              500011.0,
+              2050012.0
+            ],
+            [
+              500011.0,
+              2050002.0
+            ],
+            [
+              500013.0,
+              2050002.0
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

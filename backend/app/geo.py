@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pyproj import Transformer
+from pyproj import CRS, Transformer
+from pyproj.exceptions import CRSError
 from shapely.geometry import Polygon, mapping
 from shapely.ops import transform as shp_transform
 
@@ -15,7 +16,14 @@ class CrsError(ValueError):
 def require_epsg(epsg: int | None) -> int:
     if epsg is None:
         raise CrsError("CRS missing: EPSG is required. Refusing to guess.")
-    return int(epsg)
+    try:
+        if isinstance(epsg, bool) or str(epsg) != str(int(epsg)):
+            raise ValueError
+        code = int(epsg)
+        CRS.from_epsg(code)
+        return code
+    except (ValueError, TypeError, CRSError) as exc:
+        raise CrsError("EPSG must be a recognized integer coordinate reference code") from exc
 
 
 def lonlat_to_utm(lon: float, lat: float) -> tuple[float, float]:

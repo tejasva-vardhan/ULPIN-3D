@@ -7,5 +7,6 @@ pyproj==3.7.1
 shapely==2.0.6
 pydantic-settings==2.6.1
 numpy==2.2.2
-laspy==2.5.4
+laspy[lazrs]==2.5.4
+rasterio==1.4.3
 

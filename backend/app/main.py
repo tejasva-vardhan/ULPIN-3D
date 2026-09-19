@@ -1,17 +1,31 @@
 from pathlib import Path
+from uuid import UUID, uuid4
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse
 from sqlalchemy import text
 
 from app.config import settings
-from app.db import SessionLocal, engine, ensure_schema
-from app.record import fetch_record, record_html, supersede_new_version
+from app.db import SessionLocal, engine, ensure_schema, check_database
+from app.record import (
+    fetch_record,
+    record_html,
+    supersede_new_version,
+    withdraw_unit,
+    active_unit_id,
+    AmbiguousUnit,
+)
+from app.rights import create_party, create_baunit, link_baunit, create_rrr, list_rrr
+from app.review import record_review, review_history
 from app.geo import CrsError, require_epsg, to_wgs_geojson
 from app.citygml_export import building_lod1_citygml
 from app.gltf_export import prisms_to_gltf
-from app.ingest import create_site, ingest_dataset, list_datasets, list_sites
+from app.ingest import create_site, ingest_dataset, list_datasets, list_sites, get_dataset, ImportConflict
+from app.properties import process_dataset
+from app.pipeline.assets import KINDS, register_asset
+from app.pipeline.workflow import BuildingRequest, process_building_sources
 from app.issuer import issue_display_id
 from app.pipeline.extract import extract_footprint, iou
 from app.pipeline.synthetic_las import write_synthetic_las
@@ -29,12 +43,20 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(AmbiguousUnit)
+@app.exception_handler(ImportConflict)
+async def conflict_response(request, exc):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(CrsError)
+async def input_error_response(request, exc):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 @app.on_event("startup")
 def _startup_schema():
-    try:
-        ensure_schema()
-    except Exception:
-        pass
+    ensure_schema()
 
 
 @app.get("/")
@@ -48,12 +70,9 @@ def home():
 @app.get("/health")
 def health():
     with engine.connect() as conn:
-        postgis = conn.execute(text("SELECT PostGIS_Version()")).scalar()
-        sfcgal = conn.execute(
-            text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='postgis_sfcgal')")
-        ).scalar()
+        capabilities = check_database(conn)
         n = conn.execute(text("SELECT count(*) FROM spatial_unit")).scalar()
-    return {"ok": True, "postgis": postgis, "sfcgal": bool(sfcgal), "spatial_units": n}
+    return {"ok": True, **capabilities, "spatial_units": n}
 
 
 @app.post("/demo/seed")
@@ -129,6 +148,12 @@ def get_sites():
 
 @app.post("/datasets")
 def post_dataset(payload: dict):
+    """Import GeoJSON without merging its features.
+
+    Supply kind, geojson, epsg and site_id (from POST /sites) for construction.
+    Optional filename, geom_origin and z_ref describe the source. Heights use
+    LOCAL_SITE metres. Original features and properties remain retrievable.
+    """
     db = SessionLocal()
     try:
         row = ingest_dataset(db, payload, Path(settings.demo_dir))
@@ -154,21 +179,95 @@ def get_datasets():
         db.close()
 
 
+@app.post("/datasets/files")
+async def upload_elevation(
+    request: Request, site_id: UUID, kind: Literal["las", "dsm", "dtm"], filename: str,
+    geom_origin: Literal["SURVEY", "PLAN", "AI_DERIVED", "SYNTHETIC", "MANUAL"],
+    z_ref: Literal["LOCAL_SITE", "ORTHOMETRIC_EGM", "ELLIPSOIDAL_WGS84"],
+    local_zero_m: float | None = None, epsg: int | None = None,
+):
+    """Upload raw LAS/LAZ or single-band GeoTIFF bytes (application/octet-stream).
+
+    Vertical samples must be metres. LOCAL_SITE needs no offset. For other
+    vertical references declare local_zero_m: local_z = source_z - local_zero_m.
+    This offset does not perform geoid conversion. EPSG is read from the file
+    when available; a supplied EPSG must agree with its CRS. Limit: 64 MiB by default.
+    """
+    suffix = Path(filename).suffix.lower()
+    if suffix not in KINDS[kind]:
+        raise CrsError("Filename extension does not match the selected elevation kind")
+    root = Path(settings.upload_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / (uuid4().hex + suffix)
+    keep = False
+    try:
+        size = 0
+        with path.open("xb") as handle:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > settings.max_upload_bytes:
+                    raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit; crop to the site first")
+                handle.write(chunk)
+        if not size:
+            raise CrsError("Uploaded file is empty")
+        with SessionLocal() as db:
+            result = register_asset(db, path, site_id=site_id, kind=kind, filename=filename,
+                geom_origin=geom_origin, z_ref=z_ref, local_zero_m=local_zero_m, epsg=epsg)
+            db.commit()
+        keep = not result['reused']
+        return result
+    finally:
+        if not keep:
+            path.unlink(missing_ok=True)
+
+
+@app.get("/datasets/{dataset_id}")
+def read_dataset(dataset_id: UUID):
+    with SessionLocal() as db:
+        row = get_dataset(db, dataset_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="dataset not found")
+        return row
+
+
+@app.post("/datasets/{dataset_id}/process")
+def process_properties(dataset_id: UUID):
+    """Create prisms from an imported dataset, atomically and without issuing IDs.
+
+    Each Polygon feature needs local_code, su_class, zmin, zmax and geom_origin
+    (or dataset geom_origin). Non-parcels need parent_code; floors also need
+    level_index. Parents may be in this dataset or already in the same site.
+    See data/examples/property_import.geojson. Retrying reuses the created IDs.
+    UTILITY LineStrings accept diameter_m and constant Z coordinates, zmin/zmax,
+    or depth_m with ground_z_m; their buffered corridors always require review.
+    """
+    with SessionLocal() as db:
+        try:
+            result = process_dataset(db, dataset_id)
+            db.commit()
+            return result
+        except CrsError as exc:
+            db.rollback()
+            _crs_http(exc)
+
+
 @app.get("/spatial-units")
-def list_units():
+def list_units(site_id: UUID | None = None):
     db = SessionLocal()
     try:
         rows = db.execute(
             text(
                 """
-                SELECT display_id, su_class, local_code, parent_ulpin, version, status,
+                SELECT id::text AS uuid, site_id::text AS site_id,
+                       source_dataset_id::text AS source_dataset_id, source_feature_index,
+                       display_id, su_class, local_code, parent_ulpin, version, status,
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
-                WHERE status = 'ACTIVE'
+                WHERE status = 'ACTIVE' AND (CAST(:site AS uuid) IS NULL OR site_id = :site)
                 ORDER BY su_class, local_code
                 """
-            )
+            ), {"site": site_id}
         ).mappings().all()
         return {"count": len(rows), "units": [dict(r) for r in rows]}
     finally:
@@ -176,9 +275,10 @@ def list_units():
 
 
 @app.get("/spatial-units/by-code/{local_code}")
-def get_unit(local_code: str):
+def get_unit(local_code: str, site_id: UUID | None = None):
     db = SessionLocal()
     try:
+        unit_id = active_unit_id(db, local_code, site_id)
         row = db.execute(
             text(
                 """
@@ -186,12 +286,12 @@ def get_unit(local_code: str):
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
-                WHERE local_code = :code AND status = 'ACTIVE'
+                WHERE id = :id
                 ORDER BY version DESC
                 LIMIT 1
                 """
             ),
-            {"code": local_code},
+            {"id": unit_id},
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="not found")
@@ -244,51 +344,207 @@ def get_floors():
 
 
 @app.get("/rrr")
-def get_rrr():
+def get_rrr(site_id: UUID | None = None):
     db = SessionLocal()
     try:
-        rows = db.execute(
-            text(
-                """
-                SELECT s.local_code, s.su_class, r.rrr_type, r.share, r.description,
-                       p.name AS party_name, p.party_type
-                FROM rrr r
-                JOIN spatial_unit s ON s.id = r.spatial_unit_id
-                JOIN party p ON p.id = r.party_id
-                WHERE s.status = 'ACTIVE'
-                ORDER BY s.local_code
-                """
-            )
-        ).mappings().all()
-        out = []
-        for r in rows:
-            rec = dict(r)
-            if rec.get("share") is not None:
-                rec["share"] = float(rec["share"])
-            out.append(rec)
-        return {"count": len(out), "rrr": out}
+        rows = list_rrr(db, site_id)
+        return {"count": len(rows), "rrr": rows}
+    finally:
+        db.close()
+
+
+@app.post("/parties")
+def post_party(payload: dict):
+    """Create a party (person/organisation/association/authority)."""
+    db = SessionLocal()
+    try:
+        row = create_party(db, payload)
+        db.commit()
+        return row
+    except CrsError as exc:
+        db.rollback()
+        _crs_http(exc)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/baunits")
+def post_baunit(payload: dict):
+    """Create an administrative unit (LADM BAUnit) that RRR rows attach to."""
+    db = SessionLocal()
+    try:
+        row = create_baunit(db, payload)
+        db.commit()
+        return row
+    except CrsError as exc:
+        db.rollback()
+        _crs_http(exc)
+    except ImportConflict:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/baunits/{baunit_id}/link")
+def post_baunit_link(baunit_id: UUID, payload: dict):
+    """Link an administrative unit to a spatial unit (UUID, or site_id + local_code)."""
+    db = SessionLocal()
+    try:
+        row = link_baunit(db, baunit_id, payload)
+        db.commit()
+        return row
+    except CrsError as exc:
+        db.rollback()
+        _crs_http(exc)
+    except (AmbiguousUnit, ImportConflict):
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/rrr")
+def post_rrr(payload: dict):
+    """Record a RIGHT, RESTRICTION or RESPONSIBILITY against an ACTIVE spatial unit.
+
+    Reference the unit by spatial_unit_id, or by site_id + local_code (site_id
+    is required whenever local_code alone would be ambiguous). RIGHT shares on
+    the same spatial unit may not sum above 1; RESTRICTION/RESPONSIBILITY
+    shares are not limited this way. claim_status defaults to CLAIMED; this
+    prototype never performs its own legal verification.
+    """
+    db = SessionLocal()
+    try:
+        row = create_rrr(db, payload)
+        db.commit()
+        return row
+    except CrsError as exc:
+        db.rollback()
+        _crs_http(exc)
+    except (AmbiguousUnit, ImportConflict):
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.post("/spatial-units/{local_code}/review")
+def post_review(local_code: str, payload: dict, site_id: UUID | None = None):
+    """Record an explicit review decision for the ACTIVE version of a spatial unit.
+
+    decision is APPROVED or REJECTED; reviewer_label is required prototype
+    metadata, not an authenticated identity. Approval never sets topology to
+    VALID by itself: pass release_review_block=true on an APPROVED decision to
+    clear this unit's DEGRADED block and rerun deterministic validation, which
+    alone decides VALID/INVALID. Rejection, geometry errors or unreviewed
+    ancestors still block issuance.
+    """
+    db = SessionLocal()
+    try:
+        merged = {**payload, "local_code": local_code, "site_id": site_id}
+        row = record_review(db, merged)
+        db.commit()
+        return row
+    except CrsError as exc:
+        db.rollback()
+        _crs_http(exc)
+    except AmbiguousUnit:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.get("/spatial-units/{local_code}/review-history")
+def get_review_history(local_code: str, site_id: UUID | None = None):
+    """Review history for the ACTIVE version. Use GET /reviews/{uuid} for older versions."""
+    db = SessionLocal()
+    try:
+        return review_history(db, {"local_code": local_code, "site_id": site_id})
+    except CrsError as exc:
+        _crs_http(exc)
+    except AmbiguousUnit:
+        raise
+    finally:
+        db.close()
+
+
+@app.get("/reviews/{spatial_unit_id}")
+def get_reviews_by_unit(spatial_unit_id: UUID):
+    """Review history for any specific spatial_unit version, including superseded/withdrawn ones."""
+    db = SessionLocal()
+    try:
+        return review_history(db, {"spatial_unit_id": spatial_unit_id})
+    except CrsError as exc:
+        _crs_http(exc)
+    finally:
+        db.close()
+
+
+@app.post("/units/{local_code}/withdraw")
+def post_withdraw(local_code: str, payload: dict, site_id: UUID | None = None):
+    """Withdraw the ACTIVE version (status -> EXTINGUISHED) with a reason. Never deletes rows."""
+    db = SessionLocal()
+    try:
+        result = withdraw_unit(db, local_code, site_id, payload.get("reason"), payload.get("actor_label"))
+        db.commit()
+        return result
+    except CrsError as exc:
+        db.rollback()
+        _crs_http(exc)
+    except AmbiguousUnit:
+        db.rollback()
+        raise
+    except ValueError as exc:
+        db.rollback()
+        msg = str(exc)
+        code = 404 if msg == "not found" else 409
+        raise HTTPException(status_code=code, detail=msg) from exc
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
 
 @app.post("/issue/{local_code}")
-def issue_unit(local_code: str):
+def issue_unit(local_code: str, site_id: UUID | None = None):
     db = SessionLocal()
     try:
+        run_validation(db)
+        unit_id = active_unit_id(db, local_code, site_id)
         row = db.execute(
             text(
                 """
                 SELECT id, parent_ulpin, su_class, local_code, version,
                        display_id, topology_status
-                FROM spatial_unit WHERE local_code = :code AND status = 'ACTIVE'
+                FROM spatial_unit WHERE id = :id
                 ORDER BY version DESC LIMIT 1
                 """
             ),
-            {"code": local_code},
+            {"id": unit_id},
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="not found")
         if row["topology_status"] != "VALID":
+            # Keep the failed validation evidence even though issuance is refused.
+            db.commit()
             raise HTTPException(
                 status_code=409,
                 detail="cannot issue proposed 3D ULPIN while topology is not VALID",
@@ -309,6 +565,9 @@ def issue_unit(local_code: str):
     except HTTPException:
         db.rollback()
         raise
+    except AmbiguousUnit:
+        db.rollback()
+        raise
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -319,12 +578,19 @@ def issue_unit(local_code: str):
         db.close()
 
 
+@app.get("/records/{spatial_unit_id}")
+def get_version_record(spatial_unit_id: UUID):
+    """Full record, rights and source evidence for any historical version."""
+    with SessionLocal() as db:
+        return fetch_record(db, spatial_unit_id=spatial_unit_id)
+
+
 @app.get("/record/{local_code}")
-def get_record(local_code: str):
+def get_record(local_code: str, site_id: UUID | None = None):
     db = SessionLocal()
     try:
         ensure_schema()
-        rec = fetch_record(db, local_code)
+        rec = fetch_record(db, local_code, site_id)
         if not rec:
             raise HTTPException(status_code=404, detail="not found")
         return rec
@@ -333,11 +599,11 @@ def get_record(local_code: str):
 
 
 @app.get("/record/{local_code}/html")
-def get_record_html(local_code: str):
+def get_record_html(local_code: str, site_id: UUID | None = None):
     db = SessionLocal()
     try:
         ensure_schema()
-        rec = fetch_record(db, local_code)
+        rec = fetch_record(db, local_code, site_id)
         if not rec:
             raise HTTPException(status_code=404, detail="not found")
         return HTMLResponse(record_html(rec))
@@ -346,21 +612,24 @@ def get_record_html(local_code: str):
 
 
 @app.get("/spatial-units/by-code/{local_code}/versions")
-def list_unit_versions(local_code: str):
+def list_unit_versions(local_code: str, site_id: UUID | None = None):
     db = SessionLocal()
     try:
         rows = db.execute(
             text(
                 """
-                SELECT id::text AS uuid, display_id, version, status, derived_from::text AS derived_from,
+                SELECT site_id::text AS site_id, id::text AS uuid, display_id, version, status, derived_from::text AS derived_from,
+                       status_reason, status_actor,
                        topology_status, valid_from, valid_to
                 FROM spatial_unit
-                WHERE local_code = :code
+                WHERE local_code = :code AND (CAST(:site AS uuid) IS NULL OR site_id = :site)
                 ORDER BY version
                 """
             ),
-            {"code": local_code},
+            {"code": local_code, "site": site_id},
         ).mappings().all()
+        if len({r["site_id"] for r in rows}) > 1:
+            raise AmbiguousUnit("local_code is ambiguous; supply site_id")
         if not rows:
             raise HTTPException(status_code=404, detail="not found")
         return {"local_code": local_code, "count": len(rows), "versions": [dict(r) for r in rows]}
@@ -369,10 +638,10 @@ def list_unit_versions(local_code: str):
 
 
 @app.post("/units/{local_code}/new-version")
-def new_unit_version(local_code: str):
+def new_unit_version(local_code: str, site_id: UUID | None = None):
     db = SessionLocal()
     try:
-        result = supersede_new_version(db, local_code)
+        result = supersede_new_version(db, local_code, site_id)
         db.commit()
         return result
     except ValueError as exc:
@@ -388,7 +657,28 @@ def new_unit_version(local_code: str):
 
 
 @app.post("/process/building")
-def process_building():
+def process_building(payload: BuildingRequest):
+    """Measure external elevations and persist proposals, or preserve explicit plan levels."""
+    with SessionLocal() as db:
+        result = process_building_sources(db, payload)
+        db.commit()
+        return result
+
+
+@app.get("/runs/{run_id}")
+def process_run(run_id: UUID):
+    with SessionLocal() as db:
+        row = db.execute(text("""
+            SELECT id, stage, processor_ver, source_ids, metrics, started_at, finished_at
+            FROM process_run WHERE id = :id
+        """), {"id":run_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="processing run not found")
+        return dict(row)
+
+
+@app.post("/demo/process/building")
+def process_building_demo():
     db = SessionLocal()
     try:
         demo = Path(settings.demo_dir)
@@ -396,7 +686,7 @@ def process_building():
         meta = write_synthetic_las(las_path)
         extracted = extract_footprint(las_path)
         ref = db.execute(
-            text("SELECT ST_AsText(geom_2d) AS wkt FROM spatial_unit WHERE su_class='BUILDING' AND status='ACTIVE' LIMIT 1")
+            text("SELECT ST_AsText(geom_2d) AS wkt FROM spatial_unit WHERE su_class='BUILDING' AND status='ACTIVE' AND site_id IS NULL LIMIT 1")
         ).scalar()
         if not ref:
             raise HTTPException(status_code=400, detail="seed the demo before extracting")
@@ -419,7 +709,7 @@ def process_building():
                 UPDATE building SET extraction_method = :m,
                   z_ground = COALESCE(z_ground, 0),
                   z_roof = COALESCE(z_roof, 15)
-                WHERE spatial_unit_id = (SELECT id FROM spatial_unit WHERE su_class='BUILDING' AND status='ACTIVE' LIMIT 1)
+                WHERE spatial_unit_id = (SELECT id FROM spatial_unit WHERE su_class='BUILDING' AND status='ACTIVE' AND site_id IS NULL LIMIT 1)
                 """
             ),
             {"m": extracted["method"]},
@@ -517,6 +807,18 @@ def validation_latest():
         db.close()
 
 
+@app.get("/validation/{run_id}")
+def validation_run(run_id: UUID):
+    with SessionLocal() as db:
+        rows = db.execute(text("""
+            SELECT run_id, rule_code, passed, severity, detail, spatial_unit_id
+            FROM validation_result WHERE run_id = :run_id ORDER BY passed, rule_code
+        """), {"run_id": run_id}).mappings().all()
+        if not rows:
+            raise HTTPException(status_code=404, detail="validation run not found")
+        return {"count": len(rows), "results": [dict(row) for row in rows]}
+
+
 @app.get("/model.gltf")
 def model_gltf():
     db = SessionLocal()
@@ -528,7 +830,7 @@ def model_gltf():
                 FROM spatial_unit
                 WHERE su_class IN ('UNIT','COMMON','PARKING','UTILITY')
                   AND status = 'ACTIVE'
-                  AND local_code NOT LIKE '%DUP%'
+                  AND topology_status = 'VALID'
                 ORDER BY zmin, local_code
                 """
             )
@@ -581,7 +883,7 @@ def export_geojson():
                        zmin, zmax, volume_m3, topology_status, geom_origin, confidence,
                        ST_AsGeoJSON(ST_Transform(geom_2d, 4326)) AS geojson
                 FROM spatial_unit
-                WHERE local_code NOT LIKE '%DUP%' AND status = 'ACTIVE'
+                WHERE topology_status = 'VALID' AND status = 'ACTIVE'
                 ORDER BY su_class, local_code
                 """
             )
@@ -622,32 +924,28 @@ def export_geojson():
 def fix_overlap():
     db = SessionLocal()
     try:
-        db.execute(
-            text(
-                """
-                DELETE FROM validation_result
-                WHERE spatial_unit_id IN (SELECT id FROM spatial_unit WHERE local_code LIKE '%DUP%')
-                """
-            )
-        )
-        db.execute(
-            text(
-                """
-                DELETE FROM rrr
-                WHERE spatial_unit_id IN (SELECT id FROM spatial_unit WHERE local_code LIKE '%DUP%')
-                """
-            )
-        )
-        deleted = db.execute(
-            text("DELETE FROM spatial_unit WHERE local_code LIKE '%DUP%' RETURNING local_code")
-        ).scalars().all()
+        db.execute(text("SELECT pg_advisory_xact_lock(26011)"))
+        deleted = db.execute(text("""
+            UPDATE spatial_unit SET status = 'EXTINGUISHED', valid_to = now()
+            WHERE local_code = 'F05-U501-DUP' AND status = 'ACTIVE' AND site_id IS NULL
+            RETURNING local_code
+        """)).scalars().all()
         result = run_validation(db)
+        candidate = db.execute(text("""
+            SELECT id, parent_ulpin, su_class, local_code, version, topology_status
+            FROM spatial_unit WHERE local_code = 'F05-U501' AND status = 'ACTIVE' AND site_id IS NULL
+        """)).mappings().first()
+        if candidate and candidate["topology_status"] == "VALID":
+            display = issue_display_id(candidate["parent_ulpin"], candidate["su_class"],
+                                       candidate["local_code"], candidate["version"])
+            db.execute(text("UPDATE spatial_unit SET display_id = :display WHERE id = :id"),
+                       {"display": display, "id": candidate["id"]})
         db.commit()
         unit = db.execute(
             text(
                 """
                 SELECT display_id, topology_status, confidence, geom_origin, volume_m3
-                FROM spatial_unit WHERE local_code = 'F05-U501' AND status = 'ACTIVE'
+                FROM spatial_unit WHERE local_code = 'F05-U501' AND status = 'ACTIVE' AND site_id IS NULL
                 """
             )
         ).mappings().first()

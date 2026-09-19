@@ -113,8 +113,11 @@
 
     function issuedLabel(u) {
       const id = String(u.display_id || "");
-      if (id.startsWith("UNISSUED/") || u.topology_status === "INVALID") {
-        return "ID blocked (topology INVALID). Proposed 3D ULPIN is not issued.";
+      if (u.topology_status !== "VALID") {
+        return "Issuance blocked (" + u.topology_status + ").";
+      }
+      if (id.startsWith("UNISSUED/")) {
+        return "Proposed 3D ULPIN not yet issued.";
       }
       return id;
     }
@@ -123,9 +126,9 @@
       const gj = parseGj(u.geojson);
       if (!gj || !gj.coordinates) return;
       const isDup = String(u.local_code).includes("DUP");
-      const color = isDup ? Cesium.Color.RED.withAlpha(0.8) : (colors[u.su_class] || Cesium.Color.WHITE.withAlpha(0.3));
+      const color = u.topology_status === "INVALID" ? Cesium.Color.RED.withAlpha(0.8) : (colors[u.su_class] || Cesium.Color.WHITE.withAlpha(0.3));
       const e = viewer.entities.add({
-        id: u.local_code,
+        id: u.uuid || u.local_code,
         name: u.display_id,
         show: !isDup && u.su_class !== "FLOOR",
         polygon: {
@@ -148,7 +151,7 @@
       const selected = viewer.selectedEntity && viewer.selectedEntity.id;
       units.forEach(({ entity, rec, isDup }) => {
         if (rec.su_class === "FLOOR") { entity.show = false; return; }
-        if (isDup && selected !== rec.local_code) { entity.show = false; return; }
+        if (isDup && selected !== entity.id) { entity.show = false; return; }
         let ok = true;
         if (floor !== "all") {
           if (rec.su_class === "BUILDING") ok = false;
@@ -159,7 +162,7 @@
         }
         if (ok && !zAll && rec.su_class !== "UTILITY") ok = Number(rec.zmin) <= zCut;
         if (!zAll && rec.su_class === "BUILDING") ok = false;
-        entity.show = !!ok && !(isDup && selected !== rec.local_code);
+        entity.show = !!ok && !(isDup && selected !== entity.id);
       });
     }
 
@@ -226,7 +229,7 @@
       Object.keys(rrrByCode).forEach((k) => { delete rrrByCode[k]; });
       const extract = viewer.entities.getById("EXTRACT");
       if (extract) viewer.entities.remove(extract);
-      Promise.all([
+      return Promise.all([
         fetch("/spatial-units").then((r) => r.json()),
         fetch("/rrr").then((r) => r.json()).catch(() => ({ rrr: [] })),
       ]).then(([data, rr]) => {
@@ -259,35 +262,24 @@
     document.getElementById("btnDup").onclick = () => show("F05-U501-DUP");
     document.getElementById("btnFix").onclick = () => {
       card("Withdrawing seeded overlap…");
-      fetch("/demo/fix-overlap", { method: "POST" }).then((r) => r.json()).then((v) => {
-        const dup = viewer.entities.getById("F05-U501-DUP");
-        if (dup) viewer.entities.remove(dup);
-        for (let i = units.length - 1; i >= 0; i--) {
-          if (units[i].isDup) units.splice(i, 1);
-        }
-        const rec = v.flat_501 || {};
-        const found = units.find((u) => u.rec.local_code === "F05-U501");
-        if (found) {
-          found.rec.topology_status = rec.topology_status;
-          found.rec.display_id = rec.display_id;
-          found.rec.confidence = rec.confidence;
-        }
+      fetch("/demo/fix-overlap", { method: "POST" }).then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.detail || r.status);
+        return body;
+      }).then(async (v) => {
+        await loadScene();
         document.getElementById("floorSel").value = "5";
-        applyFilters();
         show("F05-U501");
-        card(
-          "VALID card\n" + (rec.display_id || "") +
-          "\ntopology " + rec.topology_status + "  origin " + rec.geom_origin +
-          "  confidence " + rec.confidence +
-          "\nvolume " + Number(rec.volume_m3 || 0).toFixed(1) + " m³" +
-          "\n" + (v.note || "")
-        );
-      });
+        const rec = v.flat_501 || {};
+        card("Overlap withdrawn\n" + (rec.display_id || "") +
+          "\ntopology " + rec.topology_status + "\n" + (v.note || ""));
+      }).catch((err) => card("Fix failed: " + err));
     };
     document.getElementById("floorSel").onchange = applyFilters;
     document.getElementById("zSlice").oninput = applyFilters;
     document.getElementById("btnVal").onclick = () => {
-      fetch("/validate", { method: "POST" }).then((r) => r.json()).then((v) => {
+      fetch("/validate", { method: "POST" }).then((r) => r.json()).then(async (v) => {
+        await loadScene();
         const fails = v.findings.filter((f) => !f.passed);
         card(
           "Validation errors: " + v.error_count + " / " + v.finding_count + " checks\n" +
@@ -301,7 +293,7 @@
 
     function runExtract() {
       card("Extracting nDSM footprint…");
-      return fetch("/process/building", { method: "POST" }).then((r) => r.json()).then((v) => {
+      return fetch("/demo/process/building", { method: "POST" }).then((r) => r.json()).then((v) => {
         const old = viewer.entities.getById("EXTRACT");
         if (old) viewer.entities.remove(old);
         if (v.geojson) {
@@ -341,7 +333,7 @@
         a.download = "ulpin3d-kothrud-legal.geojson";
         a.click();
         URL.revokeObjectURL(a.href);
-        card("Legal footprint GeoJSON (EPSG:4326). Proposed IDs, not official ULPIN. DUP omitted.");
+        card("Legal footprint GeoJSON (EPSG:4326). Validated footprints only. Proposed IDs, not official ULPIN.");
       }).catch((err) => {
         card("GeoJSON export failed: " + err);
       });
