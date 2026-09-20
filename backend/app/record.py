@@ -156,7 +156,7 @@ def fetch_record(db: Session, local_code: str | None = None, site_id=None, *, sp
     rec["not_official_ulpin"] = True
     rec["not_a_title"] = True
     rec["note"] = (
-        "Cadastral record card for the ULPIN-3D prototype. "
+        "Cadastral record card for the Stratum prototype. "
         "Proposed 3D ULPIN is not an official DoLR identifier. Not a legal title."
     )
     return rec
@@ -207,7 +207,7 @@ def record_html(rec: dict) -> str:
 </style></head><body>
 <div class="banner">PROPOSED 3D ULPIN — not an official DoLR identifier. This card is not a legal title.
 Official ULPIN names the land. We name the volume.</div>
-<h1>ULPIN-3D cadastral record card</h1>
+<h1>Stratum cadastral record card</h1>
 <p class="muted">LADM-aligned exploration prototype. Geometry origin: {escape(str(rec["geom_origin"]))}.</p>
 <table>{body}</table>
 <h2>RRR</h2>

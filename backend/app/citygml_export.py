@@ -31,7 +31,7 @@ def building_lod1_citygml(row: dict) -> str:
   xmlns:gml="http://www.opengis.net/gml"
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://www.opengis.net/citygml/building/2.0 http://schemas.opengis.net/citygml/building/2.0/building.xsd">
-  <gml:name>ULPIN-3D LOD1 physical export</gml:name>
+  <gml:name>Stratum LOD1 physical export</gml:name>
   <gml:description>Physical CityGML LOD1 only. Legal 3D spaces stay in PostGIS (LADM-aligned). Proposed 3D ULPIN is not an official DoLR identifier. Not cadastral title.</gml:description>
   <core:cityObjectMember>
     <bldg:Building gml:id="{gid}">

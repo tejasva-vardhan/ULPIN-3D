@@ -172,7 +172,7 @@ def create_rrr(db: Session, payload: dict) -> dict:
     result["local_code"] = unit["local_code"]
     result["not_legal_title"] = True
     result["note"] = (
-        "Entered claim in the ULPIN-3D prototype. claim_status=VERIFIED still means "
+        "Entered claim in the Stratum prototype. claim_status=VERIFIED still means "
         "operator-asserted, not an official legal determination."
     )
     return result
