@@ -21,7 +21,7 @@ import { classMeta, statusMeta, formatMeters, formatVolume, formatPercent } from
 import { useToast } from '../lib/ToastContext.jsx'
 import clsx from '../lib/clsx.js'
 
-const TOGGLE_CLASSES = ['PARCEL', 'BUILDING', 'UNIT', 'COMMON', 'PARKING', 'BALCONY', 'UTILITY']
+const TOGGLE_CLASSES = ['PARCEL', 'BUILDING', 'UNIT', 'COMMON', 'PARKING', 'BALCONY', 'AIR', 'UTILITY', 'TRANSPORT']
 
 export default function ViewerPage({ siteId, navigateTo }) {
   const toast = useToast()
@@ -90,7 +90,7 @@ export default function ViewerPage({ siteId, navigateTo }) {
 
   if (units === null) return <PageSpinner label="Loading the 3D scene…" />
 
-  const solidCount = units.filter((u) => ['UNIT', 'COMMON', 'PARKING', 'BALCONY', 'UTILITY', 'AIR', 'SUBSURFACE'].includes(u.su_class)).length
+  const solidCount = units.filter((u) => ['UNIT', 'COMMON', 'PARKING', 'BALCONY', 'UTILITY', 'AIR', 'SUBSURFACE', 'TRANSPORT'].includes(u.su_class)).length
 
   if (solidCount === 0) {
     return (
