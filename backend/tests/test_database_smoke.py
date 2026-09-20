@@ -28,8 +28,8 @@ class DatabaseSmokeTests(unittest.TestCase):
                     with Session(bind=conn) as db, patch.object(settings, "demo_dir", demo_dir):
                         for _ in range(2):
                             result = seed_demo(db)
-                            self.assertEqual(result["spatial_units"], 22)
-                            self.assertEqual(result["extruded_solids"], 22)
+                            self.assertEqual(result["spatial_units"], 24)
+                            self.assertEqual(result["extruded_solids"], 24)
                             missing = db.execute(text("""
                                 SELECT count(*) FROM spatial_unit
                                 WHERE geom_3d IS NULL OR volume_m3 IS NULL OR volume_m3 <= 0
