@@ -49,7 +49,7 @@ def prisms_to_gltf(rows: list[dict]) -> bytes:
     doc = {
         "asset": {
             "version": "2.0",
-            "generator": "ULPIN-3D proposed prisms (not official cadastral CAD)",
+            "generator": "Stratum proposed prisms (not official cadastral CAD)",
         },
         "buffers": [{"uri": uri, "byteLength": len(blob)}],
         "bufferViews": [

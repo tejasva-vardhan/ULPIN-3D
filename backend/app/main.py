@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse, StreamingResponse
 from sqlalchemy import text
 
 from app.config import settings
@@ -34,10 +34,12 @@ from app.pipeline.extract import extract_footprint, iou
 from app.pipeline.synthetic_las import write_synthetic_las
 from app.seed import degrade_without_plans, seed_demo
 from app.validate import run_validation
+from app.events import publish_sync, bind_loop, subscribe
 from shapely import wkt as shapely_wkt
+import asyncio
 import json
 
-app = FastAPI(title="ULPIN-3D", version="0.1.0")
+app = FastAPI(title="Stratum", version="0.1.0")
 frontend_dir = Path('/frontend')
 if not frontend_dir.exists():
     frontend_dir = Path(__file__).resolve().parents[2] / 'frontend'
@@ -65,6 +67,43 @@ async def input_error_response(request, exc):
 @app.on_event("startup")
 def _startup_schema():
     ensure_schema()
+
+
+@app.on_event("startup")
+async def _startup_events():
+    # `publish_sync` is called from FastAPI's sync (thread-pool) request
+    # handlers, which have no running event loop of their own — this hands
+    # them a reference to the loop the ASGI server is actually running on.
+    bind_loop(asyncio.get_running_loop())
+
+
+@app.get("/events")
+async def stream_events(request: Request):
+    async def gen():
+        try:
+            async for event in subscribe():
+                if await request.is_disconnected():
+                    break
+                # Deliberately no `event:` field: a named SSE event only
+                # reaches a browser's EventSource.onmessage when it's the
+                # default "message" type, so a per-type field name here
+                # would silently go undelivered unless every subscriber
+                # called addEventListener for every type in advance. The
+                # event's own `type` key inside the JSON body carries the
+                # same information and the frontend dispatches on that.
+                yield f"data: {json.dumps(event)}\n\n"
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx-style response buffering, if fronted by one
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.get("/")
@@ -110,6 +149,7 @@ def demo_seed():
     try:
         result = seed_demo(db)
         db.commit()
+        publish_sync("demo.seeded", {"spatial_units": result.get("spatial_units")})
         return result
     except Exception:
         db.rollback()
@@ -124,6 +164,7 @@ def demo_degraded():
     try:
         result = degrade_without_plans(db)
         db.commit()
+        publish_sync("demo.degraded", {"whole_floor_units": len(result.get("whole_floor_units") or [])})
         return result
     except ValueError as exc:
         db.rollback()
@@ -154,6 +195,7 @@ def post_site(payload: dict):
     try:
         row = create_site(db, payload)
         db.commit()
+        publish_sync("site.created", {"id": row.get("id"), "name": row.get("name")})
         return row
     except CrsError as exc:
         db.rollback()
@@ -335,6 +377,7 @@ def process_properties(dataset_id: UUID):
         try:
             result = process_dataset(db, dataset_id)
             db.commit()
+            publish_sync("dataset.processed", {"dataset_id": str(dataset_id), "count": result.get("count")})
             return result
         except CrsError as exc:
             db.rollback()
@@ -517,6 +560,7 @@ def post_rrr(payload: dict):
     try:
         row = create_rrr(db, payload)
         db.commit()
+        publish_sync("rrr.recorded", {"rrr_type": row.get("rrr_type"), "spatial_unit_id": row.get("spatial_unit_id")})
         return row
     except CrsError as exc:
         db.rollback()
@@ -547,6 +591,11 @@ def post_review(local_code: str, payload: dict, site_id: UUID | None = None):
         merged = {**payload, "local_code": local_code, "site_id": site_id}
         row = record_review(db, merged)
         db.commit()
+        publish_sync("unit.reviewed", {
+            "local_code": row.get("local_code"),
+            "decision": payload.get("decision"),
+            "topology_status": row.get("topology_status"),
+        })
         return row
     except CrsError as exc:
         db.rollback()
@@ -594,6 +643,7 @@ def post_withdraw(local_code: str, payload: dict, site_id: UUID | None = None):
     try:
         result = withdraw_unit(db, local_code, site_id, payload.get("reason"), payload.get("actor_label"))
         db.commit()
+        publish_sync("unit.withdrawn", {"local_code": local_code})
         return result
     except CrsError as exc:
         db.rollback()
@@ -647,6 +697,7 @@ def issue_unit(local_code: str, site_id: UUID | None = None):
             {"did": display, "id": row["id"]},
         )
         db.commit()
+        publish_sync("unit.issued", {"local_code": local_code, "display_id": display})
         return {
             "issued": True,
             "display_id": display,
@@ -752,6 +803,10 @@ def process_building(payload: BuildingRequest):
     with SessionLocal() as db:
         result = process_building_sources(db, payload)
         db.commit()
+        publish_sync("building.processed", {
+            "building_code": getattr(payload, "building_code", None),
+            "method": (result.get("metrics") or {}).get("method") if isinstance(result, dict) else None,
+        })
         return result
 
 
@@ -842,6 +897,7 @@ def process_building_demo():
             },
         )
         db.commit()
+        publish_sync("building.processed", {"method": extracted.get("method"), "iou": score, "used_fallback": used_fallback})
         return {
             "las": meta,
             "extract": extracted,
@@ -870,6 +926,10 @@ def validate():
     try:
         result = run_validation(db)
         db.commit()
+        publish_sync("validation.run", {
+            "finding_count": result.get("finding_count"),
+            "error_count": result.get("error_count"),
+        })
         return result
     except Exception:
         db.rollback()
@@ -999,7 +1059,7 @@ def export_geojson(site_id: UUID | None = None):
         body = {
             "type": "FeatureCollection",
             "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
-            "name": "ULPIN-3D validated footprints (proposed, not official)",
+            "name": "Stratum validated footprints (proposed, not official)",
             "features": features,
         }
         return Response(
@@ -1042,6 +1102,7 @@ def fix_overlap():
                 """
             )
         ).mappings().first()
+        publish_sync("demo.overlap_fixed", {"removed": list(deleted)})
         return {
             "removed": list(deleted),
             "validation": {"error_count": result["error_count"], "finding_count": result["finding_count"]},

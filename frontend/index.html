@@ -1,54 +1,22 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ULPIN-3D · Property workspace</title>
-<link rel="stylesheet" href="/assets/workspace.css">
-<link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Widgets/widgets.css">
-<script defer src="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Cesium.js"></script>
-<script defer src="/assets/workspace.js"></script></head><body>
-<header><div><b>ULPIN<span>3D</span></b><small>Property workspace</small></div><a href="/demo">Open synthetic demo ↗</a></header>
-<div id="notice" role="status" aria-live="polite">Loading workspace…</div>
-<main><aside>
-<label>Active site<select id="site"><option value="">Choose a site</option></select></label>
-<p id="siteInfo" class="hint">Choose or create a site to begin.</p>
-<details><summary>Create site</summary><form id="createSite">
-<label>Site name<input name="name" required maxlength="120"></label>
-<label>Parent ULPIN<input name="parent_ulpin" required minlength="14" maxlength="14" placeholder="Existing 14-character identifier"></label>
-<label>Source EPSG<input name="epsg" type="number" required value="32643" min="1"></label>
-<button>Create site</button></form></details>
-<fieldset id="siteTools" disabled>
-<details><summary>1 · Import source data</summary><form id="upload">
-<label>Data type<select name="kind" id="uploadKind"><option value="plans">Parcels / floor plans (GeoJSON)</option><option value="las">Point cloud (LAS / LAZ)</option><option value="dsm">Surface elevation (DSM GeoTIFF)</option><option value="dtm">Ground elevation (DTM GeoTIFF)</option></select></label>
-<label>Source file<input type="file" name="file" id="sourceFile" required accept=".json,.geojson"></label>
-<label>Geometry origin<select name="geom_origin"><option value="PLAN">Plan</option><option value="SURVEY">Survey</option><option value="MANUAL">Manual</option><option value="SYNTHETIC">Synthetic example</option></select></label>
-<label>Source EPSG<input type="number" name="epsg" min="1" placeholder="Required for GeoJSON; otherwise read from file"></label>
-<div id="elevationFields" hidden><label>Vertical reference<select name="z_ref"><option>LOCAL_SITE</option><option>ORTHOMETRIC_EGM</option><option>ELLIPSOIDAL_WGS84</option></select></label><label>Local zero in source heights (metres)<input type="number" name="local_zero_m" step="any" placeholder="Required for non-local heights"></label></div>
-<p class="hint">GeoJSON needs class, code, parent and height attributes. Elevation uploads are limited to 64 MiB. Heights use a local site zero; no geoid conversion is performed.</p>
-<button>Upload source</button></form><ul id="datasets" class="items"></ul></details>
-<details><summary>2 · Estimate building and floors</summary><form id="process">
-<label>Parent parcel<select name="parcel_code" id="parcel" required></select></label>
-<label>Building code<input name="building_code" required maxlength="65" placeholder="B1"></label>
-<label>Elevation input<select id="processMode"><option value="cloud">Point cloud</option><option value="raster">DSM + DTM</option></select></label>
-<label id="cloudLabel">Point cloud<select name="point_cloud_id" id="cloud"></select></label>
-<div id="rasterFields" hidden><label>DSM<select name="dsm_id" id="dsm"></select></label><label>DTM<select name="dtm_id" id="dtm"></select></label></div>
-<label>Optional plan boundaries<select name="plan_dataset_id" id="plans"></select></label>
-<label>Storeys, if known<input name="storeys" type="number" min="1" max="200" placeholder="Otherwise estimated using 3 m storeys"></label>
-<p class="hint">Estimates require review. Supplied plans take precedence. This does not detect apartment boundaries.</p><button>Generate proposal</button></form><div id="processingResult"></div></details>
-<details><summary>3 · Parties and administrative units</summary>
-<form id="partyForm"><label>Party name<input name="name" required></label><label>Party type<select name="party_type"><option value="person">Person</option><option value="organisation">Organisation</option><option value="association">Association</option><option value="authority">Authority</option></select></label><button>Create party</button></form>
-<form id="baForm"><label>Administrative unit name<input name="name" required></label><button>Create administrative unit</button></form></details>
-<div class="actions"><button type="button" id="validate">Validate properties</button><button type="button" id="export">Export validated GeoJSON</button></div>
-<p class="hint">Exports contain validated footprints and height attributes, not a legal title.</p>
-</fieldset></aside>
-<section class="scene"><div class="toolbar"><label>Floor<select id="floor"><option value="">All floors</option></select></label><label>Height cut <output id="heightLabel">All</output><input id="height" type="range" min="0" max="1" value="1" step="0.1"></label><label class="check"><input type="checkbox" id="underground">Show underground</label><button id="fit" type="button">Fit site</button></div><div id="map"><p id="mapStatus">Loading 3D viewer…</p></div><div class="legend">Blue: valid · Red: invalid · Amber: needs review · Grey: pending</div><div class="properties"><h2>Properties <span id="count">0</span></h2><label>Find a property<input id="search" type="search" placeholder="Code or property type"></label><ul id="units" class="items"></ul></div></section>
-<aside class="record"><h2>Property record</h2><p id="emptyRecord" class="hint">Select a property from the map or list.</p><div id="record" hidden>
-<h3 id="propertyTitle"></h3><div id="recordSummary"></div>
-<label>Version<select id="versions"></select></label><div id="evidence"></div>
-<details><summary>Rights and review history</summary><div id="rightsHistory"></div><div id="reviewsHistory"></div></details>
-<fieldset id="recordTools">
-<div class="actions"><button id="issue" type="button">Issue proposed ID</button><button id="version" type="button">Create new version</button><button id="citygml" type="button">Export building LOD1</button></div>
-<details><summary>Review geometry</summary><form id="reviewForm"><label>Decision<select name="decision"><option value="APPROVED">Approve</option><option value="REJECTED">Reject</option></select></label><label>Reviewer label<input name="reviewer_label" required></label><label>Reason<textarea name="reason" required></textarea></label><label>Supporting evidence reference<input name="evidence_ref" placeholder="Plan or survey reference"></label><label class="check"><input type="checkbox" name="release_review_block">Release this property's review block</label><p class="hint">Release requires evidence and reruns geometry checks. Approval does not establish ownership.</p><button>Save review</button></form></details>
-<details><summary>Record a right or restriction</summary><form id="rightsForm"><label>Party<select name="party_id" id="party" required></select></label><label>Administrative unit<select name="baunit_id" id="baunit" required></select></label><label>Type<select name="rrr_type"><option value="RIGHT">Ownership right</option><option value="RESTRICTION">Restriction</option><option value="RESPONSIBILITY">Responsibility</option></select></label><label>Ownership share (0–1)<input name="share" type="number" min="0.000001" max="1" step="any"></label><label>Description<textarea name="description"></textarea></label><label>Evidence reference<input name="evidence_ref"></label><p class="hint">Saved as an entered claim, not verified legal title.</p><button>Record claim</button></form></details>
-<details><summary>Withdraw property</summary><form id="withdrawForm"><label>Reason<textarea name="reason" required></textarea></label><label>Operator label<input name="actor_label"></label><p class="hint">Closes the active version and preserves history. Active children must be withdrawn first.</p><button class="danger">Withdraw selected property</button></form></details>
-</fieldset></div><h2>Validation findings</h2><p class="hint">Findings shown for the active site. Validation checks all active records.</p><ul id="findings" class="items"><li>Run validation to inspect findings.</li></ul></aside></main>
-<footer>Prototype · Proposed identifiers are not official DoLR ULPINs. Records and reviewer labels do not constitute legal certification. Map heights are relative to the site's local zero.</footer>
-</body></html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stratum · Proposed 3D Cadastral Prototype</title>
+    <meta
+      name="description"
+      content="Stratum — a LADM-aligned prototype for volumetric property records. Not an official DoLR identifier."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,500&family=IBM+Plex+Serif:ital,wght@0,400;0,500;0,600;1,500&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-surface text-ink-primary antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
