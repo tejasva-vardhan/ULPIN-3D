@@ -12,6 +12,7 @@ worker's subscribers only see that worker's events (fine for a single-process
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import deque
 from typing import Any
@@ -22,7 +23,17 @@ _lock = asyncio.Lock()
 
 
 def _serialize(event_type: str, payload: dict) -> dict:
-    return {"type": event_type, "payload": payload, "ts": time.time()}
+    return {"type": event_type, "payload": dict(payload or {}), "ts": time.time()}
+
+
+def sse_pack(event: dict) -> str:
+    """One EventSource frame. Compact JSON so a payload cannot split the stream."""
+    return f"data: {json.dumps(event, default=str, separators=(',', ':'))}\n\n"
+
+
+def emit(event_type: str, payload: dict | None = None) -> None:
+    """Announce a committed mutation. Never raises; the cadastre must not 500 for a UI feed."""
+    publish_sync(event_type, dict(payload or {}))
 
 
 async def publish(event_type: str, payload: dict) -> None:

@@ -106,6 +106,7 @@ UPDATE spatial_unit SET review_required=true WHERE NOT review_required AND
     (topology_status='DEGRADED' OR EXISTS
       (SELECT 1 FROM spatial_unit_review r WHERE r.spatial_unit_id=spatial_unit.id));
         """))
+        conn.execute(text("ALTER TYPE su_class ADD VALUE IF NOT EXISTS 'TRANSPORT'"))
 
 
 def get_db():

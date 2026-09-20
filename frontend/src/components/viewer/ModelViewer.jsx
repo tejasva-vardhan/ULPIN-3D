@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import Prism from './Prism.jsx'
 import { makeProjector, findOrigin, ringToPoints } from './viewerGeo.js'
 
-const SOLID_CLASSES = new Set(['UNIT', 'COMMON', 'PARKING', 'BALCONY', 'AIR', 'SUBSURFACE', 'UTILITY'])
+const SOLID_CLASSES = new Set(['UNIT', 'COMMON', 'PARKING', 'BALCONY', 'AIR', 'SUBSURFACE', 'UTILITY', 'TRANSPORT'])
 
 function ParcelOutline({ unit, project }) {
   const ring = unit.geojson?.coordinates?.[0]

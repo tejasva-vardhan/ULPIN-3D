@@ -178,7 +178,7 @@ def _write_demo_files(demo_dir: Path, features: list[dict], util_lines: list[tup
         )
     fc("parcel.geojson", by.get("PARCEL", []))
     fc("building.geojson", by.get("BUILDING", []))
-    fc("units.geojson", by.get("UNIT", []) + by.get("COMMON", []) + by.get("PARKING", []) + by.get("AIR", []))
+    fc("units.geojson", by.get("UNIT", []) + by.get("COMMON", []) + by.get("PARKING", []) + by.get("AIR", []) + by.get("TRANSPORT", []))
     fc("floors.geojson", by.get("FLOOR", []))
     util_feats = []
     for line, props in util_lines:
@@ -221,7 +221,7 @@ def seed_demo(db: Session) -> dict:
     unit_east = rect_from_origin(ox, oy, unit_e_x, by, unit_w, bh)
 
     z_ground, z_roof = 0.0, FLOORS * STOREY_M
-    ids = {k: uuid.uuid4() for k in ["parcel", "building", "ba", "assoc", "owner", "water", "sewer", "air"]}
+    ids = {k: uuid.uuid4() for k in ["parcel", "building", "ba", "assoc", "owner", "water", "sewer", "air", "transport"]}
 
     db.execute(
         text("INSERT INTO party (id, party_type, name) VALUES (:id, 'association', 'Demo Apartment Association')"),
@@ -238,6 +238,10 @@ def seed_demo(db: Session) -> dict:
     db.execute(
         text("INSERT INTO party (id, party_type, name) VALUES (:id, 'organisation', 'Demo municipal sewer (synthetic)')"),
         {"id": ids["sewer"]},
+    )
+    db.execute(
+        text("INSERT INTO party (id, party_type, name) VALUES (:id, 'organisation', 'Demo municipal transport (synthetic)')"),
+        {"id": ids["transport"]},
     )
     db.execute(
         text("INSERT INTO baunit (id, name, uid) VALUES (:id, 'Kothrud demo scheme', 'BA-PUNE-DEMO-01')"),
@@ -497,6 +501,45 @@ def seed_demo(db: Session) -> dict:
             "note": "air-rights slab above authored roof. Proposed volume, not a title.",
         }
     )
+
+    # West setback flyover: beside the building, not through it. Elevated LOCAL_SITE metres.
+    transport_poly = rect_from_origin(ox, oy, 1.5, 0.5, 6.0, 31.0)
+    trn_id = uuid.uuid4()
+    _insert_su(
+        db,
+        id=trn_id,
+        parent_id=ids["parcel"],
+        poly=transport_poly,
+        su_class="TRANSPORT",
+        local_code="TRN-ELV-01",
+        zmin=8.0,
+        zmax=14.0,
+        topology_status="VALID",
+        confidence=0.6,
+        baunit_id=ids["ba"],
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO rrr (baunit_id, party_id, spatial_unit_id, rrr_type, share, description)
+            VALUES (
+              :ba, :p, :su, 'RESTRICTION', NULL,
+              'easement-style restriction for an elevated transport corridor. Proposed volume, not a new statute.'
+            )
+            """
+        ),
+        {"ba": ids["ba"], "p": ids["transport"], "su": trn_id},
+    )
+    features.append(
+        {
+            "kind": "TRANSPORT",
+            "poly": transport_poly,
+            "local_code": "TRN-ELV-01",
+            "zmin": 8.0,
+            "zmax": 14.0,
+            "note": "elevated flyover in the west setback. Proposed volume, not a title.",
+        }
+    )
     util_lines = [
         (
             util,
@@ -551,6 +594,9 @@ def seed_demo(db: Session) -> dict:
         )).scalar_one(),
         "air_rights": db.execute(text(
             "SELECT display_id FROM spatial_unit WHERE local_code = 'AIR-B1'"
+        )).scalar_one(),
+        "elevated_transport": db.execute(text(
+            "SELECT display_id FROM spatial_unit WHERE local_code = 'TRN-ELV-01'"
         )).scalar_one(),
         "demo_dir": str(demo_dir),
     }

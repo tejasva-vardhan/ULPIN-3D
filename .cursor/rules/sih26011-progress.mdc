@@ -19,7 +19,8 @@ Done when the check in that file passes. Do not skip ahead.
 | 14 DEGRADED no-plans | DONE | F02–F05-WHOLE UNISSUED; issue 409; Restore → 22 |
 | 15 Easement RRR | DONE | `GET /rrr` UTL-WTR-01 RESTRICTION; pushed `df67a82` |
 | 16 Record card + versioning | DONE | `GET /record/{code}` + `/html`; `POST /units/{code}/new-version`; ACTIVE list; Play demo / Record card / New version |
-| 17 PS backend identities | DONE on `sih26011-ps-backend` | `AIR-B1` + `UTL-SWR-01`; `GET /capabilities`; AIR_OVER_BUILDING / UTIL_UNIT_CLASH / DUPLICATE_VOL / CLOSED_3D. Frontend not in this branch. |
+| 17 PS backend identities | DONE on main (PR #3) | `AIR-B1` + `UTL-SWR-01`; `GET /capabilities`; AIR_OVER_BUILDING / UTIL_UNIT_CLASH / DUPLICATE_VOL / CLOSED_3D. React/Three UI later (PR #4); judge Cesium still `/demo`. |
+| 18 Transport + events | DONE on `sih26011-transport-events` | `TRN-ELV-01` issued VALID; `GET /events` SSE `demo.seeded`; TRANSPORT_Z_ABOVE_GROUND / TRANSPORT_BUILDING_CLASH; seed 25. Frontend vocab only so AIR/TRANSPORT render. |
 
 Feature import now preserves GeoJSON features and creates source-linked prisms through `POST /datasets/{id}/process`. Requires site_id, explicit metre heights, class/code/parent metadata and geometry origin. Reprocessing reuses IDs; imports remain UNISSUED until explicit issuance. Use site_id for ambiguous unit codes. Demo reset refuses user-created sites/data. Sample: `data/examples/property_import.geojson`.
 

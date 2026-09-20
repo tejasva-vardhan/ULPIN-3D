@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from app.db import check_database
 from app.issuer import assert_parent_ulpin, issue_display_id
-from app.main import _startup_schema, health
+from app.main import _startup_schema, health, app, capabilities
 from app.seed import PARENT_ULPIN
 from app.solids import extrude_units
 
@@ -59,6 +59,16 @@ class BaselineTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "solid check failed"):
                 health()
+
+    def test_capabilities_name_the_ps_identities(self):
+        body = capabilities()
+        self.assertTrue(body["proposed_3d_ulpin"])
+        self.assertFalse(body["official_3d_ulpin"])
+        self.assertFalse(body["live_stream"])
+        self.assertTrue(body["identities"]["elevated_transport"])
+        self.assertTrue(body["identities"]["air_rights"])
+        self.assertIn("/events", {getattr(r, "path", None) for r in app.routes})
+        self.assertIn("TRANSPORT_Z_ABOVE_GROUND", body["automation"]["topology_validation"])
 
     def test_seed_cannot_silently_skip_solids(self):
         db = MagicMock()
