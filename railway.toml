@@ -1,13 +1,9 @@
-# Railway Configuration for ULPIN-3D Backend API
-# https://docs.railway.app/reference/config-as-code
-
 [build]
 builder = "DOCKERFILE"
-# Path relative to the repo root
 dockerfilePath = "backend/Dockerfile"
+watchPatterns = ["backend/**", "data/**"]
 
 [deploy]
-# Railway injects $PORT automatically
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
