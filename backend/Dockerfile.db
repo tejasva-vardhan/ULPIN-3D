@@ -1,3 +1,8 @@
 FROM postgis/postgis:16-3.5
-# Copy the initialization script so it runs automatically on first boot
+
+# Copy init SQL so it auto-runs on first container boot
 COPY sql/init.sql /docker-entrypoint-initdb.d/01-init.sql
+
+# Railway sets PORT dynamically for web services, but Postgres uses 5432 internally.
+# We expose 5432 as-is since Railway handles the external port mapping.
+EXPOSE 5432

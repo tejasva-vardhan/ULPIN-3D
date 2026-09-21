@@ -85,6 +85,18 @@ def demo_page():
     return FileResponse(frontend_dir / 'demo.html')
 
 
+@app.get('/health')
+def health_check():
+    """Health check endpoint used by Railway and other platforms."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {e}")
+
+
 @app.get('/parties')
 def list_parties():
     with SessionLocal() as db:
