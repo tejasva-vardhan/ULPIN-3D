@@ -1,43 +1,33 @@
 services:
   # ---------------------------------------------------------
-  # 1. PostGIS Database (Private Service)
-  # We deploy this as a custom Docker container instead of a 
-  # Managed PostgreSQL database because ULPIN-3D requires the
-  # 'postgis_sfcgal' 3D extension, which managed PaaS providers
-  # often do not support.
+  # 1. Managed PostgreSQL (Free Tier)
   # ---------------------------------------------------------
-  - type: pserv
+  - type: pgo
     name: ulpin3d-db
-    env: docker
-    dockerfilePath: ./backend/Dockerfile.db
-    envVars:
-      - key: POSTGRES_USER
-        value: ulpin
-      - key: POSTGRES_PASSWORD
-        value: ulpin3d_secret
-      - key: POSTGRES_DB
-        value: ulpin3d
-    disk:
-      name: pgdata
-      mountPath: /var/lib/postgresql/data
-      sizeGB: 1
+    plan: free
+    postgresMajorVersion: 16
 
   # ---------------------------------------------------------
-  # 2. FastAPI Backend
+  # 2. FastAPI Backend (Free Tier)
   # ---------------------------------------------------------
   - type: web
     name: ulpin3d-api
     env: docker
+    plan: free
     dockerfilePath: ./backend/Dockerfile
+    # Render will run this command before starting the server 
+    # to ensure the database schema and extensions are created.
+    preDeployCommand: "psql $DATABASE_URL -f backend/sql/init.sql"
     envVars:
       - key: DATABASE_URL
-        # This connects internally to the Private Service above
-        value: postgresql+psycopg://ulpin:ulpin3d_secret@ulpin3d-db:5432/ulpin3d
+        fromDatabase:
+          name: ulpin3d-db
+          property: connectionString
       - key: DEMO_DIR
         value: /code/data/demo
 
   # ---------------------------------------------------------
-  # 3. React Frontend (Static Site)
+  # 3. React Frontend (Static Site - Always Free)
   # ---------------------------------------------------------
   - type: web
     name: ulpin3d-frontend
@@ -46,7 +36,6 @@ services:
     staticPublishPath: "./frontend/dist"
     envVars:
       - key: VITE_API_BASE
-        # This automatically points to the FastAPI service URL
         fromService:
           type: web
           name: ulpin3d-api
