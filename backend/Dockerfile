@@ -11,4 +11,6 @@ COPY backend/start.sh /start.sh
 RUN chmod +x /start.sh
 COPY data /code/data
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
+EXPOSE 8000
 CMD ["/start.sh"]
