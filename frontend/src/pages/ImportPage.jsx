@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { FileJson, UploadCloud, Layers, Play, CheckCircle2, FileUp, Satellite } from 'lucide-react'
+import { FileJson, UploadCloud, Layers, Play, CheckCircle2, FileUp, Satellite, Network } from 'lucide-react'
 import { Card, Button, Field, inputClass, EmptyState } from '../components/ui/primitives.jsx'
 import { useToast } from '../lib/ToastContext.jsx'
 import {
@@ -10,12 +10,15 @@ import {
   uploadElevationFile,
   processBuilding,
   listSites,
+  getUnitByCode,
+  getValidationRun,
 } from '../lib/api.js'
 import clsx from '../lib/clsx.js'
 
 const TABS = [
   { key: 'geojson', label: 'Property GeoJSON', icon: FileJson },
   { key: 'elevation', label: 'Elevation → building', icon: Satellite },
+  { key: 'utility', label: 'Underground utility', icon: Network },
 ]
 
 export default function ImportPage({ siteId }) {
@@ -36,7 +39,9 @@ export default function ImportPage({ siteId }) {
           </button>
         ))}
       </div>
-      {tab === 'geojson' ? <GeoJsonImport siteId={siteId} /> : <ElevationImport siteId={siteId} />}
+      {tab === 'geojson' && <GeoJsonImport siteId={siteId} />}
+      {tab === 'elevation' && <ElevationImport siteId={siteId} />}
+      {tab === 'utility' && <UtilityImport siteId={siteId} />}
     </div>
   )
 }
@@ -230,12 +235,216 @@ function GeoJsonImport({ siteId }) {
   )
 }
 
+// --- Underground utility centre-line -----------------------------------
+
+const EXAMPLE_UTILITY = {
+  type: 'Feature',
+  geometry: {
+    type: 'LineString',
+    coordinates: [[374142, 2046745], [374157, 2046745], [374176, 2046764]],
+  },
+  properties: {},
+}
+
+function UtilityImport({ siteId }) {
+  const toast = useToast()
+  const { sites, chosen, setChosen } = useResolvedSite(siteId)
+  const [file, setFile] = useState(null)
+  const [line, setLine] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  const inputRef = useRef(null)
+  const [form, setForm] = useState({
+    localCode: 'UTIL-01',
+    parentCode: 'LOT',
+    utilityType: 'WATER',
+    diameterM: '0.6',
+    corridorWidthM: '1.0',
+    depthM: '1.5',
+    groundZM: '0',
+    epsg: '32643',
+    origin: 'SURVEY',
+  })
+
+  function readLine(raw, label) {
+    const features = raw?.type === 'FeatureCollection' ? raw.features : [raw]
+    if (features.length !== 1 || features[0]?.type !== 'Feature' || features[0]?.geometry?.type !== 'LineString') {
+      throw new Error('Choose GeoJSON containing exactly one LineString feature.')
+    }
+    if (!Array.isArray(features[0].geometry.coordinates) || features[0].geometry.coordinates.length < 2) {
+      throw new Error('The utility centre-line needs at least two coordinates.')
+    }
+    setLine(features[0])
+    setFile(label)
+    setResult(null)
+  }
+
+  async function onFile(event) {
+    const selected = event.target.files?.[0]
+    if (!selected) return
+    try {
+      readLine(JSON.parse(await selected.text()), selected.name)
+    } catch (error) {
+      setLine(null)
+      setFile(null)
+      toast.error(error.message, { title: 'Invalid utility file' })
+    }
+  }
+
+  async function submit() {
+    if (!chosen) return toast.warning('Choose a site first.')
+    if (!line) return toast.warning('Choose a utility centre-line or load the example.')
+    const diameter = Number(form.diameterM)
+    const width = Number(form.corridorWidthM)
+    const depth = Number(form.depthM)
+    const ground = Number(form.groundZM)
+    if (!form.localCode || !form.parentCode) return toast.warning('Utility and parent codes are required.')
+    if (![diameter, width, depth, ground].every(Number.isFinite) || diameter <= 0 || width <= 0 || depth <= 0) {
+      return toast.warning('Diameter, corridor width, depth, and ground elevation must be valid metre values.')
+    }
+    setBusy(true)
+    try {
+      const feature = {
+        ...line,
+        id: form.localCode,
+        properties: {
+          ...(line.properties || {}),
+          local_code: form.localCode,
+          parent_code: form.parentCode,
+          su_class: 'UTILITY',
+          utility_type: form.utilityType,
+          diameter_m: diameter,
+          corridor_width_m: width,
+          depth_m: depth,
+          ground_z_m: ground,
+          geom_origin: form.origin,
+          requires_review: true,
+        },
+      }
+      const dataset = await createDataset({
+        kind: 'underground_utilities',
+        geojson: { type: 'FeatureCollection', features: [feature] },
+        epsg: Number(form.epsg),
+        site_id: chosen,
+        filename: file || `${form.localCode}.geojson`,
+        geom_origin: form.origin,
+      })
+      const processed = await processDataset(dataset.id)
+      const [unit, validation] = await Promise.all([
+        getUnitByCode(form.localCode, chosen),
+        getValidationRun(processed.validation_run_id),
+      ])
+      const findings = (validation.results || []).filter((finding) =>
+        processed.unit_ids.includes(finding.spatial_unit_id) && !finding.passed)
+      setResult({ dataset, processed, unit, findings })
+      toast.success('The centre-line was converted into a review-required 3D utility corridor.', {
+        title: 'Utility volume created',
+      })
+    } catch (error) {
+      toast.error(error.message, { title: 'Utility import failed' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card className="space-y-3 p-5">
+        <h2 className="text-sm font-semibold text-ink-primary">Import a utility centre-line</h2>
+        <p className="text-xs text-ink-secondary">
+          A 2D LineString is buffered horizontally and placed below the declared ground elevation. The resulting corridor remains review-required.
+        </p>
+        <SitePicker sites={sites} value={chosen} onChange={setChosen} />
+        <Field label="Centre-line GeoJSON" required>
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-hairline bg-black/[0.02] px-3 py-5 text-xs text-ink-muted transition hover:border-accent-blue/40">
+            <UploadCloud size={16} /> {file || 'Choose one LineString feature'}
+            <input ref={inputRef} type="file" accept=".geojson,.json,application/geo+json" className="hidden" onChange={onFile} />
+          </label>
+        </Field>
+        <Button variant="ghost" onClick={() => {
+          readLine(EXAMPLE_UTILITY, 'Synthetic example centre-line')
+          setForm((current) => ({ ...current, origin: 'SYNTHETIC' }))
+        }} className="w-full">
+          Load synthetic example
+        </Button>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Utility local_code" required>
+            <input className={`${inputClass} font-mono`} value={form.localCode} onChange={(e) => setForm({ ...form, localCode: e.target.value })} />
+          </Field>
+          <Field label="Parent parcel code" required>
+            <input className={`${inputClass} font-mono`} value={form.parentCode} onChange={(e) => setForm({ ...form, parentCode: e.target.value })} />
+          </Field>
+          <Field label="Utility type">
+            <select className={inputClass} value={form.utilityType} onChange={(e) => setForm({ ...form, utilityType: e.target.value })}>
+              {['WATER', 'SEWER', 'GAS', 'POWER', 'TELECOM', 'OTHER'].map((type) => <option key={type}>{type}</option>)}
+            </select>
+          </Field>
+          <Field label="Source EPSG">
+            <input className={`${inputClass} font-mono`} value={form.epsg} onChange={(e) => setForm({ ...form, epsg: e.target.value })} />
+          </Field>
+          <Field label="Pipe diameter (m)">
+            <input className={`${inputClass} font-mono`} type="number" min="0.01" step="0.1" value={form.diameterM} onChange={(e) => setForm({ ...form, diameterM: e.target.value })} />
+          </Field>
+          <Field label="Corridor width (m)" hint="Proposed right-of-way envelope">
+            <input className={`${inputClass} font-mono`} type="number" min="0.01" step="0.1" value={form.corridorWidthM} onChange={(e) => setForm({ ...form, corridorWidthM: e.target.value })} />
+          </Field>
+          <Field label="Centre depth (m)" hint="Below declared ground">
+            <input className={`${inputClass} font-mono`} type="number" min="0.01" step="0.1" value={form.depthM} onChange={(e) => setForm({ ...form, depthM: e.target.value })} />
+          </Field>
+          <Field label="Ground elevation (m)">
+            <input className={`${inputClass} font-mono`} type="number" step="0.1" value={form.groundZM} onChange={(e) => setForm({ ...form, groundZM: e.target.value })} />
+          </Field>
+        </div>
+        <Field label="Geometry origin">
+          <select className={inputClass} value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })}>
+            {['SURVEY', 'PLAN', 'MANUAL', 'SYNTHETIC'].map((origin) => <option key={origin}>{origin}</option>)}
+          </select>
+        </Field>
+        <Button onClick={submit} loading={busy} icon={Network} className="w-full">Create 3D utility corridor</Button>
+      </Card>
+
+      <Card className="space-y-3 p-5">
+        <h2 className="text-sm font-semibold text-ink-primary">Construction result</h2>
+        {!result ? (
+          <EmptyState icon={Network} title="No corridor created yet" description="Import a centre-line to see its vertical range, volume, and validation findings." />
+        ) : (
+          <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="space-y-3 text-xs">
+            <div className="rounded-lg border border-status-warning/25 bg-status-warning/[0.06] p-3">
+              <p className="font-semibold text-ink-primary">Review required before issuance</p>
+              <p className="mt-1 text-ink-secondary">Buffered centre-lines are proposed corridors and do not establish an easement boundary.</p>
+            </div>
+            <dl className="grid grid-cols-2 gap-3 rounded-lg bg-black/[0.03] p-3">
+              <div><dt className="text-ink-muted">Local code</dt><dd className="font-mono text-ink-primary">{result.unit.local_code}</dd></div>
+              <div><dt className="text-ink-muted">Topology</dt><dd className="font-mono text-ink-primary">{result.unit.topology_status}</dd></div>
+              <div><dt className="text-ink-muted">Vertical range</dt><dd className="font-tabular text-ink-primary">{result.unit.zmin.toFixed(2)} to {result.unit.zmax.toFixed(2)} m</dd></div>
+              <div><dt className="text-ink-muted">Volume</dt><dd className="font-tabular text-ink-primary">{result.unit.volume_m3?.toFixed(2)} m³</dd></div>
+            </dl>
+            <div>
+              <p className="font-medium text-ink-primary">Validation findings</p>
+              {result.findings.length === 0 ? (
+                <p className="mt-1 text-status-good">No geometry conflicts detected. Human review is still required.</p>
+              ) : (
+                <ul className="mt-2 space-y-1 text-ink-secondary">
+                  {result.findings.map((finding, index) => (
+                    <li key={`${finding.rule_code}-${index}`}><span className="font-mono">{finding.rule_code}</span> · {finding.severity}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
 // --- Elevation → building pipeline -------------------------------------
 
 function ElevationImport({ siteId }) {
   const toast = useToast()
   const { sites, chosen, setChosen } = useResolvedSite(siteId)
   const [assets, setAssets] = useState([])
+  const [planDatasets, setPlanDatasets] = useState([])
   const [uploadBusy, setUploadBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -249,8 +458,24 @@ function ElevationImport({ siteId }) {
     dsmId: '',
     dtmId: '',
     thresholdM: '2.5',
+    storeys: '',
     assumedStoreyHeightM: '3.0',
+    planDatasetId: '',
   })
+
+  const loadSources = useCallback(() => {
+    listDatasets()
+      .then((response) => {
+        const rows = response.datasets || []
+        setAssets(rows.filter((dataset) => ['las', 'dsm', 'dtm'].includes(dataset.kind)))
+        setPlanDatasets(rows.filter((dataset) => !['las', 'dsm', 'dtm', 'derived-building'].includes(dataset.kind)))
+      })
+      .catch(() => {
+        setAssets([])
+        setPlanDatasets([])
+      })
+  }, [])
+  useEffect(() => loadSources(), [loadSources])
 
   async function upload() {
     const file = fileRef.current?.files?.[0]
@@ -292,6 +517,8 @@ function ElevationImport({ siteId }) {
         building_code: buildForm.buildingCode,
         threshold_m: Number(buildForm.thresholdM),
         assumed_storey_height_m: Number(buildForm.assumedStoreyHeightM),
+        ...(buildForm.storeys ? { storeys: Number(buildForm.storeys) } : {}),
+        ...(buildForm.planDatasetId ? { plan_dataset_id: buildForm.planDatasetId } : {}),
         ...(usingCloud
           ? { point_cloud_id: buildForm.pointCloudId }
           : { dsm_id: buildForm.dsmId, dtm_id: buildForm.dtmId }),
@@ -306,9 +533,11 @@ function ElevationImport({ siteId }) {
     }
   }
 
-  const lasAssets = assets.filter((a) => a.kind === 'las')
-  const dsmAssets = assets.filter((a) => a.kind === 'dsm')
-  const dtmAssets = assets.filter((a) => a.kind === 'dtm')
+  const siteAssets = assets.filter((asset) => asset.site_id === chosen)
+  const sitePlans = planDatasets.filter((dataset) => dataset.site_id === chosen)
+  const lasAssets = siteAssets.filter((a) => a.kind === 'las')
+  const dsmAssets = siteAssets.filter((a) => a.kind === 'dsm')
+  const dtmAssets = siteAssets.filter((a) => a.kind === 'dtm')
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -359,9 +588,9 @@ function ElevationImport({ siteId }) {
         <Button onClick={upload} loading={uploadBusy} icon={UploadCloud} className="w-full">
           Upload asset
         </Button>
-        {assets.length > 0 && (
+        {siteAssets.length > 0 && (
           <div className="mt-2 space-y-1.5">
-            {assets.map((a) => (
+            {siteAssets.map((a) => (
               <div key={a.id} className="flex items-center justify-between rounded-lg bg-black/[0.03] px-3 py-1.5 text-[11px]">
                 <span className="font-mono text-ink-secondary">{a.filename}</span>
                 <span className="text-ink-muted">{a.kind}</span>
@@ -374,7 +603,7 @@ function ElevationImport({ siteId }) {
       <Card className="space-y-3 p-5">
         <h2 className="text-sm font-semibold text-ink-primary">Measure a building</h2>
         <p className="text-xs text-ink-secondary">
-          Classical nDSM extraction — not a trained model. Produces a review-required proposal, never issued automatically.
+          Elevation evidence measures the outer envelope. A plan supplies floor and apartment boundaries; without one, floor bands are proposals that require review.
         </p>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Parcel local_code" required>
@@ -394,6 +623,20 @@ function ElevationImport({ siteId }) {
             />
           </Field>
         </div>
+        <Field label="Floor plan dataset" hint="Optional. Plan levels take precedence over generated bands.">
+          <select
+            className={inputClass}
+            value={buildForm.planDatasetId}
+            onChange={(e) => setBuildForm({ ...buildForm, planDatasetId: e.target.value })}
+          >
+            <option value="">No plan — propose floor bands</option>
+            {sitePlans.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.filename} ({dataset.kind})
+              </option>
+            ))}
+          </select>
+        </Field>
         <Field label="Point cloud" hint="Leave blank to use a DSM + DTM pair instead">
           <select
             className={inputClass}
@@ -432,7 +675,19 @@ function ElevationImport({ siteId }) {
             </Field>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3">
+        {!buildForm.planDatasetId && <div className="grid grid-cols-2 gap-3">
+          <Field label="Declared storeys" hint="Optional operator input">
+            <input
+              className={`${inputClass} font-mono`}
+              type="number"
+              min="1"
+              max="200"
+              step="1"
+              value={buildForm.storeys}
+              onChange={(e) => setBuildForm({ ...buildForm, storeys: e.target.value })}
+              placeholder="Infer from height"
+            />
+          </Field>
           <Field label="Height threshold (m)">
             <input
               className={`${inputClass} font-mono`}
@@ -447,7 +702,16 @@ function ElevationImport({ siteId }) {
               onChange={(e) => setBuildForm({ ...buildForm, assumedStoreyHeightM: e.target.value })}
             />
           </Field>
-        </div>
+        </div>}
+        {buildForm.planDatasetId && (
+          <Field label="Height threshold (m)">
+            <input
+              className={`${inputClass} font-mono`}
+              value={buildForm.thresholdM}
+              onChange={(e) => setBuildForm({ ...buildForm, thresholdM: e.target.value })}
+            />
+          </Field>
+        )}
         <Button onClick={submitBuilding} loading={busy} icon={Layers} className="w-full">
           Measure &amp; propose
         </Button>
@@ -457,7 +721,21 @@ function ElevationImport({ siteId }) {
             <p className="font-tabular text-ink-primary">
               Height <strong>{result.metrics.height_m?.toFixed(2)} m</strong> · method <span className="font-mono">{result.metrics.method}</span>
             </p>
-            {result.metrics.floor_count && <p className="mt-1 text-ink-secondary">Proposed floors: {result.metrics.floor_count}</p>}
+            {result.metrics.floor_segmentation && (
+              <div className="mt-2 space-y-1 text-ink-secondary">
+                <p>
+                  Floors: <strong>{result.metrics.floor_segmentation.floor_count}</strong> ·{' '}
+                  <span className="font-mono">{result.metrics.floor_segmentation.method}</span>
+                </p>
+                <p>Evidence: {result.metrics.floor_segmentation.evidence.replaceAll('_', ' ').toLowerCase()}</p>
+                {result.metrics.floor_segmentation.requires_review && (
+                  <p className="font-medium text-status-warning">Review required before issuance</p>
+                )}
+                {result.metrics.floor_segmentation.apartment_boundaries_supplied && (
+                  <p>Apartments supplied by plan: {result.metrics.floor_segmentation.apartment_boundary_count}</p>
+                )}
+              </div>
+            )}
             {result.metrics.assumptions?.length > 0 && (
               <ul className="mt-2 list-disc space-y-1 pl-4 text-ink-muted">
                 {result.metrics.assumptions.map((a, i) => (

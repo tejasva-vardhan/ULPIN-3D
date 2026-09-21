@@ -106,6 +106,19 @@ class EvaluationTests(unittest.TestCase):
         with self.assertRaisesRegex(CrsError, 'outside the EPSG:32643'):
             evaluate_case(case)
 
+    def test_explicit_metric_storage_crs_supports_public_samples_elsewhere(self):
+        cloud_file(self.root/'cloud.las', header_crs=False)
+        case = self.manifest({'kind':'las','path':'cloud.las','epsg':32618,
+                              'z_ref':'ORTHOMETRIC_NAVD88','local_zero_m':0})
+        data = json.loads(case.read_text(encoding='utf-8'))
+        data['storage_epsg'] = 32618
+        data['parcel']['epsg'] = 32618
+        data['reference']['epsg'] = 32618
+        case.write_text(json.dumps(data), encoding='utf-8')
+        result = evaluate_case(case)
+        self.assertEqual(result['geometry_epsg'], 32618)
+        self.assertGreater(result['metrics']['footprint_iou'], 0.85)
+
 
 if __name__ == '__main__':
     unittest.main()

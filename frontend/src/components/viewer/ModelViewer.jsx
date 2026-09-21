@@ -1,11 +1,61 @@
-import React, { Suspense, useMemo } from 'react'
-import { Canvas } from '@react-three/fiber'
+import React, { Suspense, useEffect, useMemo } from 'react'
+import { Canvas, useThree } from '@react-three/fiber'
 import { OrbitControls, Grid, Line, Environment, AdaptiveDpr } from '@react-three/drei'
 import * as THREE from 'three'
 import Prism from './Prism.jsx'
 import { makeProjector, findOrigin, ringToPoints } from './viewerGeo.js'
 
 const SOLID_CLASSES = new Set(['UNIT', 'COMMON', 'PARKING', 'BALCONY', 'AIR', 'SUBSURFACE', 'UTILITY'])
+
+function frameForUnits(units) {
+  const project = makeProjector(findOrigin(units))
+  const bounds = { minX: Infinity, minY: Infinity, minZ: Infinity,
+    maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity }
+  for (const unit of units) {
+    for (const ring of unit.geojson?.coordinates || []) {
+      for (const point of ring) {
+        const [x, z] = project(point)
+        bounds.minX = Math.min(bounds.minX, x)
+        bounds.maxX = Math.max(bounds.maxX, x)
+        bounds.minZ = Math.min(bounds.minZ, z)
+        bounds.maxZ = Math.max(bounds.maxZ, z)
+      }
+    }
+    bounds.minY = Math.min(bounds.minY, unit.zmin)
+    bounds.maxY = Math.max(bounds.maxY, unit.zmax)
+  }
+  if (!Number.isFinite(bounds.minX)) {
+    return { target: [0, 0, 0], position: [45, 35, 45], span: 30 }
+  }
+  const target = [
+    (bounds.minX + bounds.maxX) / 2,
+    (bounds.minY + bounds.maxY) / 2,
+    (bounds.minZ + bounds.maxZ) / 2,
+  ]
+  const span = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY,
+    bounds.maxZ - bounds.minZ, 20)
+  return {
+    target,
+    position: [target[0] + span * 1.35, target[1] + span * 1.05, target[2] + span * 1.35],
+    span,
+  }
+}
+
+function CameraFrame({ frame, controlsRef }) {
+  const camera = useThree((state) => state.camera)
+  useEffect(() => {
+    camera.position.set(...frame.position)
+    camera.far = Math.max(500, frame.span * 20)
+    camera.lookAt(...frame.target)
+    camera.updateProjectionMatrix()
+    if (controlsRef.current) {
+      controlsRef.current.target.set(...frame.target)
+      controlsRef.current.update()
+      controlsRef.current.saveState()
+    }
+  }, [camera, controlsRef, frame])
+  return null
+}
 
 function ParcelOutline({ unit, project }) {
   const ring = unit.geojson?.coordinates?.[0]
@@ -86,23 +136,26 @@ function Scene({ units, selectedId, onSelect, onHover, explode, hiddenClasses })
 }
 
 export default function ModelViewer({ units, selectedId, onSelect, onHover, explode, autoRotate, hiddenClasses, controlsRef, onPointerMissed }) {
+  const frame = useMemo(() => frameForUnits(units), [units])
   return (
-    <Canvas shadows dpr={[1, 1.75]} camera={{ position: [34, 30, 34], fov: 42, near: 0.1, far: 500 }} onPointerMissed={onPointerMissed}>
+    <Canvas shadows dpr={[1, 1.75]} camera={{ position: frame.position, fov: 42, near: 0.1, far: Math.max(500, frame.span * 20) }} onPointerMissed={onPointerMissed}>
       <color attach="background" args={['#eceeec']} />
       <fog attach="fog" args={['#eceeec', 60, 160]} />
       <Suspense fallback={null}>
         <Scene units={units} selectedId={selectedId} onSelect={onSelect} onHover={onHover} explode={explode} hiddenClasses={hiddenClasses} />
         <Environment preset="city" environmentIntensity={0.25} />
       </Suspense>
+      <CameraFrame frame={frame} controlsRef={controlsRef} />
       <OrbitControls
         ref={controlsRef}
+        target={frame.target}
         makeDefault
         autoRotate={autoRotate}
         autoRotateSpeed={0.7}
         enableDamping
         dampingFactor={0.08}
         minDistance={8}
-        maxDistance={140}
+        maxDistance={Math.max(140, frame.span * 5)}
         maxPolarAngle={Math.PI / 2.04}
       />
       <AdaptiveDpr />

@@ -49,11 +49,8 @@ site scale), and extrudes it client-side with `THREE.ExtrudeGeometry`. That's
 what makes per-unit click/hover, color-by-status, and the explode view possible;
 the glTF/CityGML endpoints stay available as static exports on the Export page.
 
-## Caveats
+## Verified demo path
 
-This was built without network access to actually `npm install` or run a real
-Vite build — every file was checked with `esbuild` for JSX/syntax errors and
-every cross-file import was checked against the target file's exports, but it
-has not been run in a live browser. If something doesn't compile, it's most
-likely a small package-version mismatch (React Three Fiber / drei APIs move
-between minor versions) — check the browser console first.
+The frontend builds with Vite and has been checked in a browser against the
+isolated Docker demo. The API's `/events` stream drives the live activity feed.
+For a repeatable presentation scene, use the root [demo runbook](../DEMO.md).

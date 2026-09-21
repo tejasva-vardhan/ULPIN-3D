@@ -113,7 +113,7 @@ export function StatTile({ label, value, hint, icon: Icon, tone = 'blue', delay 
     >
       <Card className="relative overflow-hidden p-4">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">{label}</p>
+          <p className="text-xs font-medium text-ink-secondary">{label}</p>
           {Icon && (
             <span className={clsx('rounded-md p-1.5', toneClass.chip)}>
               <Icon size={14} />

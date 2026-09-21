@@ -127,7 +127,7 @@ export default function ViewerPage({ siteId, navigateTo }) {
 
         {/* Legend & class toggles */}
         <div className="glass pointer-events-auto absolute left-3 top-3 max-w-[13rem] rounded-xl border border-hairline p-3">
-          <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
+          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink-secondary">
             <Layers3 size={12} /> Layers
           </p>
           <div className="space-y-1">

@@ -29,6 +29,7 @@ def case_schema():
     """Required JSON fields and their meanings; paths are relative to the manifest.
 
     {"case_id": "unique label", "data_kind": "real|synthetic",
+     "storage_epsg": 32643,
      "parcel": {"epsg": 32643, "geometry": "GeoJSON Polygon"},
      "reference": {"source": "independent survey/report URL or description",
                    "epsg": 32643, "footprint": "GeoJSON Polygon",
@@ -42,7 +43,7 @@ def case_schema():
     """
 
 
-def _polygon(item, label):
+def _polygon(item, label, storage_epsg):
     epsg = require_epsg(item.get("epsg"))
     if not CRS.from_epsg(epsg).is_projected and epsg != 4326:
         raise CrsError(f"{label} EPSG must be projected or EPSG:4326")
@@ -55,8 +56,8 @@ def _polygon(item, label):
             raise ValueError("expected one valid nonempty Polygon")
         if geom.has_z:
             raise ValueError("reference polygons must be 2D")
-        if epsg != STORAGE_EPSG:
-            tr = Transformer.from_crs(epsg, STORAGE_EPSG, always_xy=True)
+        if epsg != storage_epsg:
+            tr = Transformer.from_crs(epsg, storage_epsg, always_xy=True)
             geom = shp_transform(tr.transform, geom)
         if not geom.is_valid or not math.isfinite(geom.area) or geom.area <= 0:
             raise ValueError("reprojected polygon is invalid")
@@ -89,13 +90,22 @@ def evaluate_case(manifest_path):
         kind = case["data_kind"]
         if kind not in {"real", "synthetic"} or not isinstance(case_id, str) or not case_id.strip():
             raise CrsError("case_id and data_kind=real|synthetic are required")
-        parcel = _polygon(case["parcel"], "parcel")
-        longitude = Transformer.from_crs(STORAGE_EPSG, 4326, always_xy=True).transform(
-            parcel.centroid.x, parcel.centroid.y)[0]
-        if not 72 <= longitude < 78:
-            raise CrsError("Parcel is outside the EPSG:32643 longitude zone (72–78°E)")
+        storage_epsg = require_epsg(case.get("storage_epsg", STORAGE_EPSG))
+        storage_crs = CRS.from_epsg(storage_epsg)
+        if not storage_crs.is_projected or any(
+            abs(axis.unit_conversion_factor - 1) > 1e-9 for axis in storage_crs.axis_info[:2]
+        ):
+            raise CrsError("storage_epsg must be a projected CRS with metre coordinates")
+        parcel = _polygon(case["parcel"], "parcel", storage_epsg)
+        longitude, latitude = Transformer.from_crs(storage_epsg, 4326, always_xy=True).transform(
+            parcel.centroid.x, parcel.centroid.y)
+        bounds = storage_crs.area_of_use
+        if not (bounds.west <= longitude <= bounds.east and bounds.south <= latitude <= bounds.north):
+            if storage_epsg == STORAGE_EPSG:
+                raise CrsError("Parcel is outside the EPSG:32643 longitude zone (72–78°E)")
+            raise CrsError(f"Parcel is outside the EPSG:{storage_epsg} area of use")
         reference = case["reference"]
-        footprint = _polygon(reference, "reference footprint")
+        footprint = _polygon(reference, "reference footprint", storage_epsg)
         reference_height = _finite_height(reference["height_m"])
         if not parcel.buffer(0.05).covers(footprint):
             raise CrsError("Reference footprint lies outside the parcel")
@@ -111,7 +121,7 @@ def evaluate_case(manifest_path):
         if isinstance(offset, bool) or not isinstance(offset, (int, float)) or not math.isfinite(offset):
             raise CrsError("A finite local_zero_m is required")
         z_ref = elevation["z_ref"]
-        if z_ref not in {"LOCAL_SITE", "ORTHOMETRIC_EGM", "ELLIPSOIDAL_WGS84"}:
+        if z_ref not in {"LOCAL_SITE", "ORTHOMETRIC_EGM", "ORTHOMETRIC_NAVD88", "ELLIPSOIDAL_WGS84"}:
             raise CrsError("Unsupported vertical reference")
         if z_ref == "LOCAL_SITE" and offset != 0:
             raise CrsError("LOCAL_SITE data must use zero local_zero_m")
@@ -120,7 +130,8 @@ def evaluate_case(manifest_path):
             path, info = _source_file(manifest_path, elevation["path"], "las", elevation.get("epsg"))
             inputs.append({"path": str(path), "sha256": checksum_file(path), "epsg": info["source_epsg"], "kind": "las"})
             start = perf_counter()
-            measured = measure_cloud(path, info["source_epsg"], offset, parcel)
+            measured = measure_cloud(path, info["source_epsg"], offset, parcel,
+                                     target_epsg=storage_epsg)
         else:
             paths = []
             for label in ("dsm", "dtm"):
@@ -130,7 +141,8 @@ def evaluate_case(manifest_path):
             start = perf_counter()
             measured = measure_rasters(paths[0][0], paths[1][0],
                 {"source_epsg": paths[0][1]["source_epsg"], "local_zero_m": offset},
-                {"source_epsg": paths[1][1]["source_epsg"], "local_zero_m": offset}, parcel)
+                {"source_epsg": paths[1][1]["source_epsg"], "local_zero_m": offset}, parcel,
+                target_epsg=storage_epsg)
         elapsed = perf_counter() - start
         predicted = measured["footprint"]
         overlap = predicted.intersection(footprint).area
@@ -145,7 +157,7 @@ def evaluate_case(manifest_path):
                           "footprint": mapping(predicted),
                           "assumptions": measured["assumptions"], "confidence": measured["confidence"],
                           "confidence_kind": measured["confidence_kind"]},
-            "geometry_epsg": STORAGE_EPSG,
+            "geometry_epsg": storage_epsg,
             "metrics": {"footprint_iou": overlap / union,
                         "footprint_area_bias_m2": predicted.area - footprint.area,
                         "centroid_error_m": predicted.centroid.distance(footprint.centroid),

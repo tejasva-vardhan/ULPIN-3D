@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from uuid import UUID, uuid4
 from typing import Literal
@@ -9,6 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse
 from sqlalchemy import text
 
 from app.config import settings
+from app.events import bind_loop, publish_sync, subscribe
 from app.db import SessionLocal, engine, ensure_schema, check_database
 from app.record import (
     fetch_record,
@@ -65,6 +67,24 @@ async def input_error_response(request, exc):
 @app.on_event("startup")
 def _startup_schema():
     ensure_schema()
+
+
+@app.on_event("startup")
+async def _startup_events():
+    bind_loop(asyncio.get_running_loop())
+
+
+@app.get("/events")
+async def events():
+    async def stream():
+        yield ": connected\n\n"
+        async for event in subscribe():
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @app.get("/")
@@ -133,7 +153,7 @@ def capabilities():
         },
         "automation": {
             "building_extraction": "classical nDSM, not trained PointNet",
-            "floor_segmentation": "plans win; otherwise 3.0 m DEGRADED bands",
+            "floor_segmentation": "validated plan levels, declared-storey bands, or review-required height-inferred bands",
             "vertical_delineation": "2D footprint extruded [zmin, zmax] SFCGAL prism",
             "topology_validation": list(RULES),
         },
@@ -147,6 +167,7 @@ def demo_seed():
     try:
         result = seed_demo(db)
         db.commit()
+        publish_sync("demo.seeded", {"spatial_units": result["spatial_units"]})
         return result
     except Exception:
         db.rollback()
@@ -161,6 +182,7 @@ def demo_degraded():
     try:
         result = degrade_without_plans(db)
         db.commit()
+        publish_sync("demo.degraded", {"whole_floor_units": len(result["whole_floor_units"])})
         return result
     except ValueError as exc:
         db.rollback()
@@ -191,6 +213,7 @@ def post_site(payload: dict):
     try:
         row = create_site(db, payload)
         db.commit()
+        publish_sync("site.created", {"name": row["name"]})
         return row
     except CrsError as exc:
         db.rollback()
@@ -372,6 +395,7 @@ def process_properties(dataset_id: UUID):
         try:
             result = process_dataset(db, dataset_id)
             db.commit()
+            publish_sync("dataset.processed", {"count": result["count"]})
             return result
         except CrsError as exc:
             db.rollback()
@@ -554,6 +578,7 @@ def post_rrr(payload: dict):
     try:
         row = create_rrr(db, payload)
         db.commit()
+        publish_sync("rrr.recorded", {"rrr_type": row["rrr_type"]})
         return row
     except CrsError as exc:
         db.rollback()
@@ -584,6 +609,8 @@ def post_review(local_code: str, payload: dict, site_id: UUID | None = None):
         merged = {**payload, "local_code": local_code, "site_id": site_id}
         row = record_review(db, merged)
         db.commit()
+        publish_sync("unit.reviewed", {"local_code": local_code,
+            "decision": row["decision"], "topology_status": row["topology_status"]})
         return row
     except CrsError as exc:
         db.rollback()
@@ -631,6 +658,7 @@ def post_withdraw(local_code: str, payload: dict, site_id: UUID | None = None):
     try:
         result = withdraw_unit(db, local_code, site_id, payload.get("reason"), payload.get("actor_label"))
         db.commit()
+        publish_sync("unit.withdrawn", {"local_code": local_code})
         return result
     except CrsError as exc:
         db.rollback()
@@ -684,6 +712,7 @@ def issue_unit(local_code: str, site_id: UUID | None = None):
             {"did": display, "id": row["id"]},
         )
         db.commit()
+        publish_sync("unit.issued", {"local_code": local_code, "display_id": display})
         return {
             "issued": True,
             "display_id": display,
@@ -789,6 +818,7 @@ def process_building(payload: BuildingRequest):
     with SessionLocal() as db:
         result = process_building_sources(db, payload)
         db.commit()
+        publish_sync("building.processed", {"method": result["metrics"]["method"]})
         return result
 
 
@@ -907,6 +937,7 @@ def validate():
     try:
         result = run_validation(db)
         db.commit()
+        publish_sync("validation.run", {"error_count": result["error_count"]})
         return result
     except Exception:
         db.rollback()
@@ -1071,6 +1102,7 @@ def fix_overlap():
             db.execute(text("UPDATE spatial_unit SET display_id = :display WHERE id = :id"),
                        {"display": display, "id": candidate["id"]})
         db.commit()
+        publish_sync("demo.overlap_fixed", {"local_code": "F05-U501", "error_count": result["error_count"]})
         unit = db.execute(
             text(
                 """

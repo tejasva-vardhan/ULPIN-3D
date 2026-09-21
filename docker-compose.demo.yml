@@ -1,0 +1,57 @@
+name: ulpin-3d-demo
+
+services:
+  db:
+    image: postgis/postgis:16-3.5
+    environment:
+      POSTGRES_USER: ulpin
+      POSTGRES_PASSWORD: ulpin
+      POSTGRES_DB: ulpin3d_demo
+    volumes:
+      - demo_pgdata:/var/lib/postgresql/data
+      - ./backend/sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ulpin -d ulpin3d_demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  seed:
+    build: ./backend
+    image: ulpin-3d-demo-api
+    command: ["python", "-m", "app.demo_bootstrap"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://ulpin:ulpin@db:5432/ulpin3d_demo
+      DEMO_DIR: /data/demo
+      UPLOAD_DIR: /data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - demo_files:/data
+    restart: "no"
+
+  api:
+    image: ulpin-3d-demo-api
+    pull_policy: never
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://ulpin:ulpin@db:5432/ulpin3d_demo
+      DEMO_DIR: /data/demo
+      UPLOAD_DIR: /data/uploads
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    volumes:
+      - demo_files:/data
+      - ./frontend:/frontend:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  demo_pgdata:
+  demo_files:

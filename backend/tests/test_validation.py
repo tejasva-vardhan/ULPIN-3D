@@ -98,6 +98,20 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(len(clash), 1)
         self.assertEqual(clash[0]["severity"], "WARN")
 
+    def test_utility_structure_and_utility_clashes_are_reported(self):
+        findings, statuses = evaluate_units(scene(
+            unit("garage", su_class="PARKING", parent_id="building", z=(-2, 0)),
+            unit("water", su_class="UTILITY", parent_id="parcel", z=(-1.5, -0.5)),
+            unit("gas", su_class="UTILITY", parent_id="parcel", z=(-1.2, -0.8))))
+        self.assertEqual(statuses["water"], "VALID")
+        self.assertEqual(statuses["gas"], "VALID")
+        failed = {(finding["spatial_unit_id"], finding["rule_code"])
+                  for finding in findings if not finding["passed"]}
+        self.assertIn(("water", "UTIL_STRUCTURE_CLASH"), failed)
+        self.assertIn(("gas", "UTIL_STRUCTURE_CLASH"), failed)
+        self.assertIn(("water", "UTIL_UTILITY_CLASH"), failed)
+        self.assertIn(("gas", "UTIL_UTILITY_CLASH"), failed)
+
     def test_duplicate_volume_hash_blocks_both(self):
         _, statuses = evaluate_units(scene(
             unit("a", geom_hash="same-vol"),

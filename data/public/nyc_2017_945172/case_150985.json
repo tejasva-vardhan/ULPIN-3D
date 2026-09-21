@@ -1,0 +1,87 @@
+{
+  "case_id": "nyc-2017-lidar-building-150985",
+  "data_kind": "real",
+  "storage_epsg": 32618,
+  "parcel": {
+    "epsg": 32618,
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [
+            573206.7682889957,
+            4499237.118632097
+          ],
+          [
+            573194.0054445408,
+            4499237.350310395
+          ],
+          [
+            573194.3298950127,
+            4499248.9249026235
+          ],
+          [
+            573226.5828104942,
+            4499248.339304966
+          ],
+          [
+            573226.3212463943,
+            4499236.763633208
+          ],
+          [
+            573206.7682889957,
+            4499237.118632097
+          ]
+        ]
+      ]
+    }
+  },
+  "reference": {
+    "epsg": 32618,
+    "footprint": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [
+            573201.2626806925,
+            4499240.90010986
+          ],
+          [
+            573198.8770530171,
+            4499240.827485587
+          ],
+          [
+            573198.6729560675,
+            4499247.529148632
+          ],
+          [
+            573203.655780081,
+            4499247.680902695
+          ],
+          [
+            573213.6903870773,
+            4499247.986394853
+          ],
+          [
+            573213.8944839543,
+            4499241.284731681
+          ],
+          [
+            573201.2626806925,
+            4499240.90010986
+          ]
+        ]
+      ]
+    },
+    "height_m": 7.976631953263906,
+    "height_definition": "NYC HEIGHT_ROOF: roof above building ground elevation; source value in US survey feet, converted to metres; individual measurement method unspecified",
+    "source": "https://data.cityofnewyork.us/resource/5zhs-2jue.json?doitt_id=150985"
+  },
+  "elevation": {
+    "kind": "las",
+    "path": "lot_5010680096_metre.las",
+    "epsg": 32618,
+    "z_ref": "ORTHOMETRIC_NAVD88",
+    "local_zero_m": 0
+  }
+}

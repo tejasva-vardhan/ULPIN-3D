@@ -210,8 +210,7 @@ function Hero({ onSeed, onViewModel, busy, hasData }) {
             transition={{ delay: 0.05 }}
             className="font-serif text-[28px] font-medium leading-[1.15] tracking-tight text-ink-primary sm:text-[34px]"
           >
-            Property records that finally have a{' '}
-            <em className="text-accent-blue font-semibold not-italic">height</em>.
+            Land records stop at the ground. Stratum keeps going.
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 8 }}
@@ -219,9 +218,8 @@ function Hero({ onSeed, onViewModel, busy, hasData }) {
             transition={{ delay: 0.1 }}
             className="mt-3 text-sm leading-relaxed text-ink-secondary"
           >
-            Stratum extends the flat land parcel into a validated stack of legal volumes — buildings, floors,
-            units, common areas, and utility corridors — each with its own provenance, review trail and proposed
-            3D identifier.
+            It extends the flat parcel into a validated stack of legal volumes — buildings, floors, units, common
+            areas, and utility corridors — each with its own provenance, review trail and proposed 3D identifier.
           </motion.p>
           <motion.div
             initial={{ opacity: 0, y: 8 }}
@@ -250,25 +248,65 @@ function Hero({ onSeed, onViewModel, busy, hasData }) {
   )
 }
 
-function StackGlyph() {
-  const layers = [
-    { y: 0, w: 96, c: '#2a78d6' },
-    { y: 22, w: 88, c: '#1baf7a' },
-    { y: 44, w: 80, c: '#4a3aa7' },
-    { y: 66, w: 72, c: '#eda100' },
-  ]
+// An axonometric parcel with a building rising out of it — not a generic
+// bar chart, but the literal shape the headline describes: the flat plane
+// where ordinary land records stop, and the volumes Stratum adds on top.
+// Face coordinates are a precomputed isometric extrusion (30° axes), not
+// hand-guessed.
+const PARCEL_FACES = {
+  top: 'M40,140 L90.2,111 L60.8,94 L10.6,123 Z',
+  right: 'M40,140 L90.2,111 L90.2,118 L40,147 Z',
+  left: 'M40,140 L10.6,123 L10.6,130 L40,147 Z',
+}
+const FLOOR_FACES = [
+  {
+    top: 'M45.2,133 L71.2,118 L55.6,109 L29.6,124 Z',
+    right: 'M45.2,133 L71.2,118 L71.2,130 L45.2,145 Z',
+    left: 'M45.2,133 L29.6,124 L29.6,136 L45.2,145 Z',
+    color: '#2a78d6',
+  },
+  {
+    top: 'M45.2,121 L71.2,106 L55.6,97 L29.6,112 Z',
+    right: 'M45.2,121 L71.2,106 L71.2,118 L45.2,133 Z',
+    left: 'M45.2,121 L29.6,112 L29.6,124 L45.2,133 Z',
+    color: '#1baf7a',
+  },
+  {
+    top: 'M45.2,109 L71.2,94 L55.6,85 L29.6,100 Z',
+    right: 'M45.2,109 L71.2,94 L71.2,106 L45.2,121 Z',
+    left: 'M45.2,109 L29.6,100 L29.6,112 L45.2,121 Z',
+    color: '#4a3aa7',
+  },
+]
+const FACE_SHADE = { top: 1, right: 0.82, left: 0.62 }
+
+function shade(hex, factor) {
+  const n = parseInt(hex.slice(1), 16)
+  const r = Math.round(((n >> 16) & 255) * factor)
+  const g = Math.round(((n >> 8) & 255) * factor)
+  const b = Math.round((n & 255) * factor)
+  return `#${[r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('')}`
+}
+
+function IsoBlock({ faces, color, delay }) {
   return (
-    <svg viewBox="0 0 120 120" className="relative h-32 w-32">
-      {layers.map((l, i) => (
-        <motion.g
-          key={i}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 + i * 0.08, duration: 0.4 }}
-        >
-          <rect x={(120 - l.w) / 2} y={90 - l.y} width={l.w} height={16} rx={3} fill={l.c} opacity={0.85} />
-        </motion.g>
-      ))}
+    <motion.g initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay, duration: 0.45, ease: 'easeOut' }}>
+      <path d={faces.top} fill={shade(color, FACE_SHADE.top)} />
+      <path d={faces.right} fill={shade(color, FACE_SHADE.right)} />
+      <path d={faces.left} fill={shade(color, FACE_SHADE.left)} />
+    </motion.g>
+  )
+}
+
+function StackGlyph() {
+  return (
+    <svg viewBox="0 0 96 76" className="relative h-32 w-40">
+      <g transform="translate(-2.6,-78)">
+        <IsoBlock faces={PARCEL_FACES} color="#c7c6bd" delay={0.15} />
+        {FLOOR_FACES.map((f, i) => (
+          <IsoBlock key={i} faces={f} color={f.color} delay={0.25 + i * 0.1} />
+        ))}
+      </g>
     </svg>
   )
 }

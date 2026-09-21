@@ -13,7 +13,8 @@ RULES = (
     "CRS_STORAGE", "Z_RANGE", "SIMPLE_2D", "PARENT_CONTAIN",
     "PARENT_Z", "PARENT_ACTIVE", "PARENT_VALID", "UNIT_OVERLAP",
     "FLOOR_GAP", "FLOOR_OVERLAP", "UTIL_Z_BELOW_GROUND",
-    "AIR_OVER_BUILDING", "UTIL_UNIT_CLASH", "DUPLICATE_VOL", "CLOSED_3D",
+    "AIR_OVER_BUILDING", "UTIL_UNIT_CLASH", "UTIL_STRUCTURE_CLASH",
+    "UTIL_UTILITY_CLASH", "DUPLICATE_VOL", "CLOSED_3D",
 )
 XY_TOLERANCE_M = 0.03
 Z_TOLERANCE_M = 0.05
@@ -139,18 +140,46 @@ def evaluate_units(rows: list[dict]) -> tuple[list[dict], dict]:
 
     utilities = [r for r in rows if r["su_class"] == "UTILITY" and r["id"] in polygons and r["id"] in valid_z]
     exclusive = [r for r in rows if r["su_class"] == "UNIT" and r["id"] in polygons and r["id"] in valid_z]
+    structures = [r for r in rows if r["su_class"] in ("BUILDING", "PARKING", "SUBSURFACE")
+                  and r["id"] in polygons and r["id"] in valid_z]
+
+    def overlap_volume(a, b):
+        height = min(a["zmax"], b["zmax"]) - max(a["zmin"], b["zmin"])
+        if height <= 0:
+            return 0
+        return polygons[a["id"]].intersection(polygons[b["id"]]).area * height
+
     for util in utilities:
         hits = []
         for unit in exclusive:
             if util.get("site_id") != unit.get("site_id"):
                 continue
-            height = min(util["zmax"], unit["zmax"]) - max(util["zmin"], unit["zmin"])
-            if height <= 0:
-                continue
-            volume = polygons[util["id"]].intersection(polygons[unit["id"]]).area * height
+            volume = overlap_volume(util, unit)
             if volume > OVERLAP_TOLERANCE_M3:
                 hits.append({"unit": unit["local_code"], "overlap_m3": volume})
         add(util, "UTIL_UNIT_CLASH", not hits, {"hits": hits}, "WARN")
+        structure_hits = []
+        for structure in structures:
+            if util.get("site_id") != structure.get("site_id"):
+                continue
+            volume = overlap_volume(util, structure)
+            if volume > OVERLAP_TOLERANCE_M3:
+                structure_hits.append({"class": structure["su_class"],
+                    "structure": structure["local_code"], "overlap_m3": volume})
+        add(util, "UTIL_STRUCTURE_CLASH", not structure_hits,
+            {"hits": structure_hits}, "WARN")
+
+    utility_hits = {util["id"]: [] for util in utilities}
+    for first, second in combinations(utilities, 2):
+        if first.get("site_id") != second.get("site_id"):
+            continue
+        volume = overlap_volume(first, second)
+        if volume > OVERLAP_TOLERANCE_M3:
+            utility_hits[first["id"]].append({"utility": second["local_code"], "overlap_m3": volume})
+            utility_hits[second["id"]].append({"utility": first["local_code"], "overlap_m3": volume})
+    for util in utilities:
+        hits = utility_hits[util["id"]]
+        add(util, "UTIL_UTILITY_CLASH", not hits, {"hits": hits}, "WARN")
 
     hashes = {}
     for row in rows:

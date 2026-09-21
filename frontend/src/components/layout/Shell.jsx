@@ -10,7 +10,6 @@ import {
   Scale,
   ClipboardCheck,
   DownloadCloud,
-  Radio,
   ChevronDown,
   Menu,
   X,
@@ -213,9 +212,7 @@ function LiveIndicator() {
               transition={{ duration: 0.15 }}
               className="glass absolute right-0 z-20 mt-1.5 w-80 max-h-[24rem] overflow-y-auto rounded-lg border border-hairline p-2 shadow-panel"
             >
-              <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-muted">
-                Live activity
-              </p>
+              <p className="px-2 py-1.5 text-xs font-semibold text-ink-secondary">Live activity</p>
               {events.length === 0 ? (
                 <p className="px-2 py-3 text-xs text-ink-muted">
                   Nothing yet — actions across the workspace (seeding, imports, reviews, validation) will show up
@@ -324,18 +321,25 @@ export function Shell({ active, onNavigate, siteId, onSiteChange, children }) {
   )
 }
 
+// The brand mark is three offset slabs, not an icon-in-a-rounded-square —
+// it reads as strata (the word this product is named for) and doubles as
+// the same motif the hero glyph and stat tiles build on.
+function StrataMark({ size = 22 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="2" y="15" width="20" height="5" rx="1.5" fill="#2a78d6" />
+      <rect x="4.5" y="9" width="15" height="5" rx="1.5" fill="#1baf7a" />
+      <rect x="7" y="3" width="10" height="5" rx="1.5" fill="#4a3aa7" />
+    </svg>
+  )
+}
+
 function Brand({ onClose }) {
   return (
     <div className="flex items-center justify-between border-b border-hairline px-4 py-4">
       <div className="flex items-center gap-2.5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-blue">
-          <Radio size={16} className="text-white" />
-        </div>
-        <div>
-          <p className="font-serif text-[15px] font-semibold italic leading-tight tracking-tight text-ink-primary">
-            Strat<span className="not-italic text-accent-blue">um</span>
-          </p>
-        </div>
+        <StrataMark />
+        <p className="font-serif text-[16px] font-semibold leading-tight tracking-tight text-ink-primary">Stratum</p>
       </div>
       {onClose && (
         <button onClick={onClose} className="rounded-md p-1 text-ink-muted hover:bg-black/5">
