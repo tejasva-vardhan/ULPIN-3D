@@ -10,4 +10,5 @@ data/uploads/
 postgres-data/
 *.egg-info/
 .pytest_cache/
+.cursor/
 app.log
