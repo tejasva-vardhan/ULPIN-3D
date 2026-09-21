@@ -1,0 +1,21 @@
+{
+  "type": "FeatureCollection",
+  "description": "Synthetic underground water centre-line for the ULPIN-3D demo. EPSG:32643.",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "UTIL-01",
+      "properties": {
+        "utility_type": "WATER"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [374142.0, 2046745.0],
+          [374157.0, 2046745.0],
+          [374176.0, 2046764.0]
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "type": "FeatureCollection",
+  "name": "DSCE Building No. 05 — Department of Mechanical Engineering",
+  "description": "Demonstration dataset built from OpenStreetMap way 347171800 and a team field visit on 2026-09-21. The building footprint is sourced from OSM. The parcel is an analysis envelope, not a legal cadastral boundary. The three equal-height floor bands are operator assumptions and require review; no rooms, ownership rights, GNSS accuracy, or surveyed heights are asserted.",
+  "source": {
+    "building_footprint": "OpenStreetMap way/347171800",
+    "license": "OpenStreetMap contributors, ODbL",
+    "field_observation_date": "2026-09-21",
+    "declared_storeys": 3,
+    "vertical_basis": "Three equal 3 m bands assumed for demonstration; measurement pending"
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05-SITE",
+      "properties": {
+        "local_code": "DSCE-MECH-05-SITE",
+        "su_class": "PARCEL",
+        "label": "DSCE Building 05 analysis envelope",
+        "zmin": -2.0,
+        "zmax": 12.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "boundary_status": "DEMONSTRATION_ANALYSIS_ENVELOPE",
+        "disclaimer": "Not an official or surveyed cadastral parcel boundary"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5676200, 12.9086300], [77.5676170, 12.9084300], [77.5680470, 12.9084230], [77.5680500, 12.9086230], [77.5676200, 12.9086300]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05",
+      "properties": {
+        "local_code": "DSCE-MECH-05",
+        "su_class": "BUILDING",
+        "parent_code": "DSCE-MECH-05-SITE",
+        "label": "Building No. 05 — Department of Mechanical Engineering",
+        "zmin": 0.0,
+        "zmax": 9.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "confidence": 0.7,
+        "footprint_source": "OpenStreetMap way/347171800",
+        "osm_building_tag": "yes",
+        "field_observation_date": "2026-09-21",
+        "height_basis": "Assumed 3 storeys × 3 m; survey or LiDAR measurement pending"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05-GF",
+      "properties": {
+        "local_code": "DSCE-MECH-05-GF",
+        "su_class": "FLOOR",
+        "parent_code": "DSCE-MECH-05",
+        "level_index": 0,
+        "label": "Ground Floor",
+        "zmin": 0.0,
+        "zmax": 3.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; floor plan and measured levels pending"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05-F01",
+      "properties": {
+        "local_code": "DSCE-MECH-05-F01",
+        "su_class": "FLOOR",
+        "parent_code": "DSCE-MECH-05",
+        "level_index": 1,
+        "label": "First Floor",
+        "zmin": 3.0,
+        "zmax": 6.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; floor plan and measured levels pending"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05-F02",
+      "properties": {
+        "local_code": "DSCE-MECH-05-F02",
+        "su_class": "FLOOR",
+        "parent_code": "DSCE-MECH-05",
+        "level_index": 2,
+        "label": "Second Floor",
+        "zmin": 6.0,
+        "zmax": 9.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; floor plan and measured levels pending"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]
+      }
+    }
+  ]
+}

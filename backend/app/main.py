@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse
 from sqlalchemy import text
 
 from app.config import settings
+from app.events import bind_loop, emit, subscribe, sse_pack
 from app.db import SessionLocal, engine, ensure_schema, check_database
 from app.record import (
     fetch_record,
@@ -35,7 +36,6 @@ from app.pipeline.extract import extract_footprint, iou
 from app.pipeline.synthetic_las import write_synthetic_las
 from app.seed import degrade_without_plans, seed_demo
 from app.validate import run_validation, RULES
-from app.events import bind_loop, emit, subscribe, sse_pack
 from shapely import wkt as shapely_wkt
 import json
 
@@ -72,8 +72,6 @@ def _startup_schema():
 @app.on_event("startup")
 async def _bind_event_loop():
     bind_loop(asyncio.get_running_loop())
-
-
 @app.get("/")
 def home():
     page = frontend_dir / 'index.html'
@@ -141,7 +139,7 @@ def capabilities():
         },
         "automation": {
             "building_extraction": "classical nDSM, not trained PointNet",
-            "floor_segmentation": "plans win; otherwise 3.0 m DEGRADED bands",
+            "floor_segmentation": "validated plan levels, declared-storey bands, or review-required height-inferred bands",
             "vertical_delineation": "2D footprint extruded [zmin, zmax] SFCGAL prism",
             "topology_validation": list(RULES),
         },
@@ -720,7 +718,7 @@ def issue_unit(local_code: str, site_id: UUID | None = None):
             {"did": display, "id": row["id"]},
         )
         db.commit()
-        emit("unit.issued", {"local_code": row["local_code"]})
+        emit("unit.issued", {"local_code": row["local_code"], "display_id": display})
         return {
             "issued": True,
             "display_id": display,
@@ -1113,7 +1111,11 @@ def fix_overlap():
             db.execute(text("UPDATE spatial_unit SET display_id = :display WHERE id = :id"),
                        {"display": display, "id": candidate["id"]})
         db.commit()
-        emit("demo.overlap_fixed", {"removed": list(deleted)})
+        emit("demo.overlap_fixed", {
+            "local_code": "F05-U501",
+            "removed": list(deleted),
+            "error_count": result.get("error_count"),
+        })
         unit = db.execute(
             text(
                 """
@@ -1133,4 +1135,3 @@ def fix_overlap():
         raise
     finally:
         db.close()
-

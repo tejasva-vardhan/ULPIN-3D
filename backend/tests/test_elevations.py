@@ -2,6 +2,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+import laspy
+import numpy as np
+from pyproj import CRS
 from shapely.geometry import box, LineString, mapping
 
 from app.geo import CrsError
@@ -38,6 +41,49 @@ class ElevationTests(unittest.TestCase):
         result = measure_cloud(path, 32643, 430, self.parcel)
         self.assertEqual(result['confidence'], 0.35)
         self.assertTrue(any('Ground estimated' in item for item in result['assumptions']))
+
+    def test_unclassified_cloud_filters_adjacent_rough_returns(self):
+        gx, gy = np.meshgrid(np.arange(0, 30, 0.5), np.arange(0, 20, 0.5))
+        roof_x, roof_y = np.meshgrid(np.arange(2, 22, 0.25), np.arange(2, 12, 0.25))
+        rough_x, rough_y = np.meshgrid(np.arange(22, 26, 0.25), np.arange(2, 12, 0.25))
+        rough_z = np.where(np.arange(rough_x.size) % 2, 442, 448)
+        x = np.concatenate([gx.ravel(), roof_x.ravel(), rough_x.ravel()]) + 500000
+        y = np.concatenate([gy.ravel(), roof_y.ravel(), rough_y.ravel()]) + 2050000
+        z = np.concatenate([np.full(gx.size, 430), np.full(roof_x.size, 439), rough_z])
+        classes = np.concatenate([np.full(gx.size, 2), np.ones(roof_x.size + rough_x.size)])
+        header = laspy.LasHeader(point_format=3, version='1.2')
+        header.add_crs(CRS.from_epsg(32643))
+        header.offsets = [500000, 2050000, 430]
+        header.scales = [0.001, 0.001, 0.001]
+        cloud = laspy.LasData(header)
+        cloud.x, cloud.y, cloud.z = x, y, z
+        cloud.classification = classes.astype('uint8')
+        path = self.root/'rough_returns.las'
+        cloud.write(path)
+        result = measure_cloud(path, 32643, 430, self.parcel)
+        self.assertEqual(result['method'], 'ground-plane-smooth-surface')
+        self.assertAlmostEqual(result['height_m'], 9, places=2)
+        self.assertLess(result['footprint'].bounds[2], 500023)
+
+    def test_two_substantial_roofs_require_a_plan_or_smaller_parcel(self):
+        gx, gy = np.meshgrid(np.arange(0, 30, 0.5), np.arange(0, 20, 0.5))
+        a_x, a_y = np.meshgrid(np.arange(2, 14, 0.5), np.arange(2, 12, 0.5))
+        b_x, b_y = np.meshgrid(np.arange(17, 29, 0.5), np.arange(2, 12, 0.5))
+        x = np.concatenate([gx.ravel(), a_x.ravel(), b_x.ravel()]) + 500000
+        y = np.concatenate([gy.ravel(), a_y.ravel(), b_y.ravel()]) + 2050000
+        z = np.concatenate([np.full(gx.size, 430), np.full(a_x.size + b_x.size, 439)])
+        classes = np.concatenate([np.full(gx.size, 2), np.full(a_x.size + b_x.size, 6)])
+        header = laspy.LasHeader(point_format=3, version='1.2')
+        header.add_crs(CRS.from_epsg(32643))
+        header.offsets = [500000, 2050000, 430]
+        header.scales = [0.001, 0.001, 0.001]
+        cloud = laspy.LasData(header)
+        cloud.x, cloud.y, cloud.z = x, y, z
+        cloud.classification = classes.astype('uint8')
+        path = self.root/'two_roofs.las'
+        cloud.write(path)
+        with self.assertRaisesRegex(CrsError, 'Multiple substantial building candidates'):
+            measure_cloud(path, 32643, 430, self.parcel)
 
     def test_missing_and_conflicting_crs(self):
         path = cloud_file(self.root/'missing.las', header_crs=False)

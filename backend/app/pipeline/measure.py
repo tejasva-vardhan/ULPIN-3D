@@ -24,16 +24,39 @@ def _footprint(mask, transform, parcel):
         candidates.extend(p for p in parts if p.geom_type == 'Polygon' and p.area > 0)
     if not candidates:
         raise CrsError('No elevated building candidate found in this parcel')
-    return max(candidates, key=lambda p: p.area), len(candidates)
+    candidates.sort(key=lambda p: p.area, reverse=True)
+    if len(candidates) > 1 and candidates[1].area >= max(50, candidates[0].area * 0.5):
+        raise CrsError('Multiple substantial building candidates in this parcel; provide a plan footprint or a smaller parcel')
+    return candidates[0], len(candidates)
 
 
-def measure_cloud(path, epsg, local_zero_m, parcel, *, cell_m=0.5, threshold_m=2.5, footprint=None):
+def _smooth_roof_returns(x, y, height, candidates, *, cell_m=1.0, max_std_m=0.5):
+    """Reject rough unclassified patches such as vegetation, without a plan outline."""
+    indices = np.flatnonzero(candidates)
+    if len(indices) < 3:
+        return np.zeros_like(candidates)
+    cols = np.floor((x[indices] - x.min()) / cell_m).astype(np.int64)
+    rows = np.floor((y[indices] - y.min()) / cell_m).astype(np.int64)
+    width = int(cols.max()) + 1
+    _, inverse = np.unique(rows * width + cols, return_inverse=True)
+    counts = np.bincount(inverse)
+    sums = np.bincount(inverse, weights=height[indices])
+    squared = np.bincount(inverse, weights=np.square(height[indices]))
+    variance = np.maximum(0, squared / counts - np.square(sums / counts))
+    smooth_cells = (counts >= 3) & (variance <= max_std_m ** 2)
+    selected = np.zeros_like(candidates)
+    selected[indices] = smooth_cells[inverse]
+    return selected
+
+
+def measure_cloud(path, epsg, local_zero_m, parcel, *, cell_m=0.5, threshold_m=2.5, footprint=None,
+                  target_epsg=32643):
     with laspy.open(path) as reader:
         if not 0 < reader.header.point_count <= MAX_POINTS:
             raise CrsError('Point cloud is empty or exceeds the site-scale processing limit')
         cloud = reader.read()
     x, y, z = np.asarray(cloud.x), np.asarray(cloud.y), np.asarray(cloud.z) - local_zero_m
-    x, y = Transformer.from_crs(epsg, 32643, always_xy=True).transform(x, y, errcheck=True)
+    x, y = Transformer.from_crs(epsg, target_epsg, always_xy=True).transform(x, y, errcheck=True)
     x, y = np.asarray(x), np.asarray(y)
     classes = np.asarray(cloud.classification)
     finite = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
@@ -62,9 +85,11 @@ def measure_cloud(path, epsg, local_zero_m, parcel, *, cell_m=0.5, threshold_m=2
         candidates = classified
         method = 'classified-building-points'
     else:
-        candidates = elevated & ~np.isin(classes, [2, 3, 4, 5, 7, 9, 18])
-        method = 'ground-plane-height-threshold'
-        assumptions.append('Unclassified elevated surfaces can include vegetation or other structures')
+        unclassified = elevated & np.isin(classes, [0, 1])
+        candidates = _smooth_roof_returns(x, y, z - predicted_ground, unclassified)
+        method = 'ground-plane-smooth-surface'
+        assumptions.append('Unclassified returns were screened in 1 m cells: at least 3 returns and no more than 0.5 m height standard deviation')
+        assumptions.append('Smooth elevated surfaces can still include non-building structures; inspect the candidate footprint')
     if footprint is None:
         if candidates.sum() < 3:
             raise CrsError('Insufficient elevated building samples')
@@ -99,10 +124,11 @@ def measure_cloud(path, epsg, local_zero_m, parcel, *, cell_m=0.5, threshold_m=2
             'confidence_kind': 'heuristic, not a calibrated probability'}
 
 
-def measure_rasters(dsm_path, dtm_path, dsm_meta, dtm_meta, parcel, *, threshold_m=2.5, footprint=None):
+def measure_rasters(dsm_path, dtm_path, dsm_meta, dtm_meta, parcel, *, threshold_m=2.5, footprint=None,
+                    target_epsg=32643):
     with rasterio.open(dsm_path) as dsm, rasterio.open(dtm_path) as dtm:
         dst_transform, width, height = calculate_default_transform(
-            dsm_meta['source_epsg'], 32643, dsm.width, dsm.height, *dsm.bounds)
+            dsm_meta['source_epsg'], target_epsg, dsm.width, dsm.height, *dsm.bounds)
         if not 0 < width * height <= MAX_CELLS:
             raise CrsError('Reprojected raster grid exceeds the site-scale limit')
         aligned = []
@@ -113,7 +139,7 @@ def measure_rasters(dsm_path, dtm_path, dsm_meta, dtm_meta, parcel, *, threshold
             target = np.full((height, width), np.nan, dtype='float64')
             reproject(values, target, src_transform=source.transform,
                       src_crs=meta['source_epsg'], src_nodata=np.nan,
-                      dst_transform=dst_transform, dst_crs=32643, dst_nodata=np.nan,
+                      dst_transform=dst_transform, dst_crs=target_epsg, dst_nodata=np.nan,
                       resampling=Resampling.bilinear)
             aligned.append(target)
     surface, ground = aligned
@@ -122,7 +148,7 @@ def measure_rasters(dsm_path, dtm_path, dsm_meta, dtm_meta, parcel, *, threshold
     if valid.sum() < 4:
         raise CrsError('DSM and DTM have insufficient overlapping valid coverage inside the parcel')
     ndsm = surface - ground
-    assumptions = ['DSM and DTM aligned to the DSM grid in EPSG:32643 using bilinear resampling']
+    assumptions = [f'DSM and DTM aligned to the DSM grid in EPSG:{target_epsg} using bilinear resampling']
     if footprint is None:
         footprint, count = _footprint(valid & (ndsm >= threshold_m), dst_transform, parcel)
         if count > 1:

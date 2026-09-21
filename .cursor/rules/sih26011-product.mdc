@@ -12,6 +12,6 @@ alwaysApply: true
 - Display: `IN-ULPIN3D/{parent_ulpin}/{CLASS}/{local}/vNN` + UUID PK. Parent must be 14 chars (official or labelled placeholder `ULPIN14PLACE01`). Reject ISO 8000-118 as cadastral ID; reject UUID-only display. INVALID units stay `UNISSUED/{local}` until topology is VALID.
 - Store EPSG:32643, source demo EPSG:4326, Z `LOCAL_SITE`. Missing EPSG = hard fail (do not guess).
 - Geometry: 2D footprint + zmin/zmax + SFCGAL prism. Topology = SQL/Shapely, never ML. Extract = classical nDSM (AI_DERIVED, not legal title). Plans win over LiDAR for floors.
-- Stack in repo: FastAPI + PostGIS 16/3.5 + SFCGAL + Shapely/pyproj + CesiumJS 1.119 served from `frontend/index.html`. LADM-aligned, not ISO-certified. CityGML export-only.
+- Stack in repo: FastAPI + PostGIS 16/3.5 + SFCGAL + Shapely/pyproj. React is served from `frontend/index.html`; the scripted CesiumJS 1.119 demo is `frontend/demo.html`. LADM-aligned, not ISO-certified. CityGML export-only.
 - Do not: PointNet, live CORS client, CityGML as the database, extra markdown in the repo, commit/push unless asked.
 - Author: tejasva-vardhan only. No Co-Authored-By.

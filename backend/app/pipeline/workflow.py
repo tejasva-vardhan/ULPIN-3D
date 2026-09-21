@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from uuid import UUID
 
-import numpy as np
 from pydantic import BaseModel, Field, model_validator
 from shapely import wkt
 from shapely.geometry import mapping, shape
@@ -14,6 +13,7 @@ from app.config import settings
 from app.geo import CrsError
 from app.ingest import get_dataset, ingest_dataset
 from app.pipeline.assets import asset_path
+from app.pipeline.floors import describe_plan_segmentation, propose_floor_segmentation
 from app.pipeline.measure import measure_cloud, measure_rasters
 from app.properties import CODE, process_dataset
 
@@ -61,7 +61,8 @@ def process_building_sources(db, request: BuildingRequest):
     plan = source(request.plan_dataset_id) if request.plan_dataset_id else None
     footprint = None
     if plan:
-        matches = [f for f in plan['meta'].get('features', [])
+        plan_features = plan['meta'].get('features', [])
+        matches = [f for f in plan_features
                    if f['properties'].get('local_code') == request.building_code
                    and f['properties'].get('su_class') == 'BUILDING']
         if len(matches) != 1:
@@ -69,6 +70,7 @@ def process_building_sources(db, request: BuildingRequest):
         footprint = shape(matches[0]['geometry'])
         if footprint.geom_type != 'Polygon' or not parcel.buffer(0.03).covers(footprint):
             raise CrsError('Plan building footprint must be a polygon within the selected parcel')
+        floor_segmentation = describe_plan_segmentation(plan_features, request.building_code, footprint)
     if request.point_cloud_id:
         inputs = [source(request.point_cloud_id, 'las')]
         cloud = inputs[0]
@@ -89,6 +91,8 @@ def process_building_sources(db, request: BuildingRequest):
                          'local_zero_m': row['meta']['local_zero_m']} for row in inputs]
     if plan:
         result = process_dataset(db, UUID(plan['id']))
+        metrics['floor_segmentation'] = floor_segmentation
+        metrics['floor_count'] = floor_segmentation['floor_count']
         metrics['plans_preserved'] = True
         metrics['plan_source'] = {'id': plan['id'], 'checksum_sha256': plan['checksum_sha256']}
         plan_props = matches[0]['properties']
@@ -97,9 +101,11 @@ def process_building_sources(db, request: BuildingRequest):
         metrics['assumptions'].append('Plan boundaries and levels take precedence; measured heights did not overwrite them')
         inputs.append(plan)
     else:
-        floors = request.storeys or max(1, int(np.floor(measured['height_m'] / request.assumed_storey_height_m + 0.5)))
-        if floors > 200:
-            raise CrsError('Estimated floor count exceeds the prototype limit')
+        floor_segmentation = propose_floor_segmentation(
+            measured['ground_z'], measured['roof_z'], declared_storeys=request.storeys,
+            assumed_storey_height_m=request.assumed_storey_height_m)
+        floors = floor_segmentation['floor_count']
+        metrics['floor_segmentation'] = floor_segmentation
         metrics['floor_count'] = floors
         metrics['assumptions'].append('Equal-height floors are proposals; no internal slabs or apartment boundaries were observed')
         if request.storeys is None:
@@ -112,7 +118,7 @@ def process_building_sources(db, request: BuildingRequest):
                         'confidence':measured['confidence'],'requires_review':True, **extra}}
         features = [feature(request.building_code, 'BUILDING', request.parcel_code,
                             measured['ground_z'], measured['roof_z'])]
-        levels = np.linspace(measured['ground_z'], measured['roof_z'], floors + 1)
+        levels = floor_segmentation['boundaries_m']
         for i in range(floors):
             features.append(feature(f'{request.building_code}-F{i+1:02d}', 'FLOOR', request.building_code,
                                     levels[i], levels[i+1], level_index=i+1, label=f'Proposed floor {i+1}'))

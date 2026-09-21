@@ -82,6 +82,14 @@ class PipelineDatabaseTests(unittest.TestCase):
         result = process_building(payload)
         self.assertEqual(result['count'], 4)  # building plus three proposed floors; no invented apartments
         self.assertAlmostEqual(result['metrics']['height_m'], 9, places=3)
+        segmentation = result['metrics']['floor_segmentation']
+        self.assertEqual(segmentation['method'], 'HEIGHT_BANDS')
+        self.assertAlmostEqual(segmentation['boundaries_m'][0], result['metrics']['ground_z'])
+        self.assertAlmostEqual(segmentation['boundaries_m'][-1], result['metrics']['roof_z'])
+        self.assertEqual([round(b - a, 6) for a, b in zip(
+            segmentation['boundaries_m'], segmentation['boundaries_m'][1:])], [3, 3, 3])
+        self.assertTrue(segmentation['requires_review'])
+        self.assertFalse(segmentation['apartment_boundaries_observed'])
         units = [u for u in list_units(UUID(self.site['id']))['units'] if u['su_class'] != 'PARCEL']
         self.assertTrue(all(u['topology_status'] == 'DEGRADED' for u in units))
         self.assertTrue(all(u['display_id'].startswith('UNISSUED/') for u in units))
@@ -99,6 +107,7 @@ class PipelineDatabaseTests(unittest.TestCase):
         self.assertEqual(result['count'], 4)
         self.assertAlmostEqual(result['metrics']['height_m'], 9)
         self.assertEqual(result['metrics']['method'], 'aligned-dsm-minus-dtm')
+        self.assertEqual(result['metrics']['floor_segmentation']['method'], 'DECLARED_STOREYS')
 
     def test_plans_take_precedence_over_measured_height(self):
         raw = example()
@@ -106,6 +115,9 @@ class PipelineDatabaseTests(unittest.TestCase):
         plans = self.vector(raw)
         result = process_building(self.request(point_cloud_id=self.asset()['id'], plan_dataset_id=plans['id']))
         self.assertTrue(result['metrics']['plans_preserved'])
+        self.assertEqual(result['metrics']['floor_segmentation']['method'], 'PLAN_LEVELS')
+        self.assertEqual(result['metrics']['floor_segmentation']['floor_count'], 1)
+        self.assertEqual(result['metrics']['floor_segmentation']['apartment_boundary_count'], 2)
         self.assertEqual(result['metrics']['plan_source']['checksum_sha256'], plans['checksum_sha256'])
         self.assertAlmostEqual(result['metrics']['height_difference_from_plan_m'], 6, places=3)
         with self.session() as db:

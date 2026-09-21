@@ -116,7 +116,7 @@ export default function RecordCard({ localCode, siteId, open, onClose }) {
 function Kv({ label, value, mono, truncate }) {
   return (
     <div>
-      <dt className="text-[10px] uppercase tracking-wide text-ink-muted">{label}</dt>
+      <dt className="text-[11px] text-ink-muted">{label}</dt>
       <dd className={`mt-0.5 text-ink-primary ${mono ? 'font-mono text-[11px]' : ''} ${truncate ? 'truncate' : ''}`}>{value ?? '—'}</dd>
     </div>
   )
