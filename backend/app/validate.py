@@ -15,6 +15,7 @@ RULES = (
     "FLOOR_GAP", "FLOOR_OVERLAP", "UTIL_Z_BELOW_GROUND",
     "AIR_OVER_BUILDING", "UTIL_UNIT_CLASH", "UTIL_STRUCTURE_CLASH",
     "UTIL_UTILITY_CLASH", "DUPLICATE_VOL", "CLOSED_3D",
+    "TRANSPORT_Z_ABOVE_GROUND", "TRANSPORT_BUILDING_CLASH",
 )
 XY_TOLERANCE_M = 0.03
 Z_TOLERANCE_M = 0.05
@@ -180,6 +181,26 @@ def evaluate_units(rows: list[dict]) -> tuple[list[dict], dict]:
     for util in utilities:
         hits = utility_hits[util["id"]]
         add(util, "UTIL_UTILITY_CLASH", not hits, {"hits": hits}, "WARN")
+
+    for row in rows:
+        if row["su_class"] != "TRANSPORT" or row["id"] not in valid_z:
+            continue
+        add(row, "TRANSPORT_Z_ABOVE_GROUND", row["zmin"] > 0,
+            {"zmin": row["zmin"], "z_ref": "LOCAL_SITE"})
+
+    transports = [r for r in rows if r["su_class"] == "TRANSPORT" and r["id"] in polygons and r["id"] in valid_z]
+    for tr in transports:
+        hits = []
+        for b in buildings:
+            if tr.get("site_id") != b.get("site_id"):
+                continue
+            height = min(tr["zmax"], b["zmax"]) - max(tr["zmin"], b["zmin"])
+            if height <= 0:
+                continue
+            volume = polygons[tr["id"]].intersection(polygons[b["id"]]).area * height
+            if volume > OVERLAP_TOLERANCE_M3:
+                hits.append({"building": b["local_code"], "overlap_m3": volume})
+        add(tr, "TRANSPORT_BUILDING_CLASH", not hits, {"hits": hits})
 
     hashes = {}
     for row in rows:

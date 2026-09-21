@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, JSONResponse
 from sqlalchemy import text
 
 from app.config import settings
-from app.events import bind_loop, publish_sync, subscribe
+from app.events import bind_loop, emit, subscribe, sse_pack
 from app.db import SessionLocal, engine, ensure_schema, check_database
 from app.record import (
     fetch_record,
@@ -70,23 +70,8 @@ def _startup_schema():
 
 
 @app.on_event("startup")
-async def _startup_events():
+async def _bind_event_loop():
     bind_loop(asyncio.get_running_loop())
-
-
-@app.get("/events")
-async def events():
-    async def stream():
-        yield ": connected\n\n"
-        async for event in subscribe():
-            yield f"data: {json.dumps(event)}\n\n"
-
-    return StreamingResponse(stream(), media_type="text/event-stream", headers={
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-    })
-
-
 @app.get("/")
 def home():
     page = frontend_dir / 'index.html'
@@ -142,6 +127,7 @@ def capabilities():
             "common_areas": True,
             "air_rights": True,
             "underground_utilities": True,
+            "elevated_transport": True,
         },
         "integrations": {
             "gis_parcels_geojson": True,
@@ -161,13 +147,30 @@ def capabilities():
     }
 
 
+@app.get("/events")
+async def event_stream():
+    """In-process activity feed for the workspace UI. Not GNSS CORS and not a legal ledger."""
+    async def frames():
+        async for event in subscribe():
+            yield sse_pack(event)
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/demo/seed")
 def demo_seed():
     db = SessionLocal()
     try:
         result = seed_demo(db)
         db.commit()
-        publish_sync("demo.seeded", {"spatial_units": result["spatial_units"]})
+        emit("demo.seeded", {"spatial_units": result.get("spatial_units")})
         return result
     except Exception:
         db.rollback()
@@ -182,7 +185,7 @@ def demo_degraded():
     try:
         result = degrade_without_plans(db)
         db.commit()
-        publish_sync("demo.degraded", {"whole_floor_units": len(result["whole_floor_units"])})
+        emit("demo.degraded", {"whole_floor_units": len(result.get("whole_floor_units") or [])})
         return result
     except ValueError as exc:
         db.rollback()
@@ -213,7 +216,7 @@ def post_site(payload: dict):
     try:
         row = create_site(db, payload)
         db.commit()
-        publish_sync("site.created", {"name": row["name"]})
+        emit("site.created", {"name": row.get("name") if isinstance(row, dict) else None})
         return row
     except CrsError as exc:
         db.rollback()
@@ -395,7 +398,7 @@ def process_properties(dataset_id: UUID):
         try:
             result = process_dataset(db, dataset_id)
             db.commit()
-            publish_sync("dataset.processed", {"count": result["count"]})
+            emit("dataset.processed", {"count": result.get("count")})
             return result
         except CrsError as exc:
             db.rollback()
@@ -578,7 +581,7 @@ def post_rrr(payload: dict):
     try:
         row = create_rrr(db, payload)
         db.commit()
-        publish_sync("rrr.recorded", {"rrr_type": row["rrr_type"]})
+        emit("rrr.recorded", {"rrr_type": row.get("rrr_type"), "local_code": row.get("local_code")})
         return row
     except CrsError as exc:
         db.rollback()
@@ -609,8 +612,11 @@ def post_review(local_code: str, payload: dict, site_id: UUID | None = None):
         merged = {**payload, "local_code": local_code, "site_id": site_id}
         row = record_review(db, merged)
         db.commit()
-        publish_sync("unit.reviewed", {"local_code": local_code,
-            "decision": row["decision"], "topology_status": row["topology_status"]})
+        emit("unit.reviewed", {
+            "local_code": row.get("local_code"),
+            "decision": row.get("decision"),
+            "topology_status": row.get("topology_status"),
+        })
         return row
     except CrsError as exc:
         db.rollback()
@@ -658,7 +664,7 @@ def post_withdraw(local_code: str, payload: dict, site_id: UUID | None = None):
     try:
         result = withdraw_unit(db, local_code, site_id, payload.get("reason"), payload.get("actor_label"))
         db.commit()
-        publish_sync("unit.withdrawn", {"local_code": local_code})
+        emit("unit.withdrawn", {"local_code": result.get("local_code")})
         return result
     except CrsError as exc:
         db.rollback()
@@ -712,7 +718,7 @@ def issue_unit(local_code: str, site_id: UUID | None = None):
             {"did": display, "id": row["id"]},
         )
         db.commit()
-        publish_sync("unit.issued", {"local_code": local_code, "display_id": display})
+        emit("unit.issued", {"local_code": row["local_code"], "display_id": display})
         return {
             "issued": True,
             "display_id": display,
@@ -818,7 +824,9 @@ def process_building(payload: BuildingRequest):
     with SessionLocal() as db:
         result = process_building_sources(db, payload)
         db.commit()
-        publish_sync("building.processed", {"method": result["metrics"]["method"]})
+        metrics = result.get("metrics") if isinstance(result, dict) else None
+        method = (metrics or {}).get("method") if isinstance(metrics, dict) else None
+        emit("building.processed", {"method": method})
         return result
 
 
@@ -909,6 +917,7 @@ def process_building_demo():
             },
         )
         db.commit()
+        emit("building.processed", {"method": extracted.get("method")})
         return {
             "las": meta,
             "extract": extracted,
@@ -937,7 +946,7 @@ def validate():
     try:
         result = run_validation(db)
         db.commit()
-        publish_sync("validation.run", {"error_count": result["error_count"]})
+        emit("validation.run", {"error_count": result.get("error_count")})
         return result
     except Exception:
         db.rollback()
@@ -986,7 +995,7 @@ def model_gltf():
                 """
                 SELECT local_code, zmin, zmax, ST_AsText(geom_2d) AS wkt
                 FROM spatial_unit
-                WHERE su_class IN ('UNIT','COMMON','PARKING','UTILITY','AIR')
+                WHERE su_class IN ('UNIT','COMMON','PARKING','BALCONY','AIR','SUBSURFACE','UTILITY','TRANSPORT')
                   AND status = 'ACTIVE'
                   AND topology_status = 'VALID'
                 ORDER BY zmin, local_code
@@ -1102,7 +1111,11 @@ def fix_overlap():
             db.execute(text("UPDATE spatial_unit SET display_id = :display WHERE id = :id"),
                        {"display": display, "id": candidate["id"]})
         db.commit()
-        publish_sync("demo.overlap_fixed", {"local_code": "F05-U501", "error_count": result["error_count"]})
+        emit("demo.overlap_fixed", {
+            "local_code": "F05-U501",
+            "removed": list(deleted),
+            "error_count": result.get("error_count"),
+        })
         unit = db.execute(
             text(
                 """
@@ -1122,4 +1135,3 @@ def fix_overlap():
         raise
     finally:
         db.close()
-

@@ -119,6 +119,23 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(statuses["a"], "INVALID")
         self.assertEqual(statuses["b"], "INVALID")
 
+    def test_elevated_transport_beside_building_is_valid(self):
+        findings, statuses = evaluate_units(scene(
+            unit("flyover", su_class="TRANSPORT", parent_id="parcel", z=(8, 14), bounds=(-9, -9, -6, 15))))
+        self.assertEqual(statuses["flyover"], "VALID")
+        self.assertTrue(any(f["rule_code"] == "TRANSPORT_Z_ABOVE_GROUND" and f["passed"] for f in findings))
+        self.assertTrue(any(f["rule_code"] == "TRANSPORT_BUILDING_CLASH" and f["passed"] for f in findings))
+
+    def test_transport_at_or_below_ground_fails(self):
+        _, statuses = evaluate_units(scene(
+            unit("road", su_class="TRANSPORT", parent_id="parcel", z=(-1, 2), bounds=(-9, -9, -6, 15))))
+        self.assertEqual(statuses["road"], "INVALID")
+
+    def test_transport_through_the_building_fails(self):
+        _, statuses = evaluate_units(scene(
+            unit("through", su_class="TRANSPORT", parent_id="parcel", z=(8, 14), bounds=(-5, -5, 15, 15))))
+        self.assertEqual(statuses["through"], "INVALID")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ export const SU_CLASS_META = {
   AIR: { label: 'Air rights', color: '#eda100', short: 'AIR' },
   SUBSURFACE: { label: 'Subsurface', color: '#4f8f3f', short: 'SUB' },
   UTILITY: { label: 'Utility corridor', color: '#eb6834', short: 'UTL' },
+  TRANSPORT: { label: 'Elevated transport', color: '#0f766e', short: 'TRN' },
 }
 
 export const STATUS_META = {

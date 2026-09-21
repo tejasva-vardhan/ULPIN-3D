@@ -84,6 +84,8 @@
       COMMON: Cesium.Color.ORANGE.withAlpha(0.45),
       PARKING: Cesium.Color.PURPLE.withAlpha(0.45),
       UTILITY: Cesium.Color.LIME.withAlpha(0.85),
+      AIR: Cesium.Color.GOLD.withAlpha(0.45),
+      TRANSPORT: Cesium.Color.fromCssColorString("#0f766e").withAlpha(0.7),
     };
 
     const units = [];
@@ -192,6 +194,14 @@
       }
       if (rec.su_class === "UTILITY") {
         extra = "\nUnderground utility prism. Depth assumed for demo (LOCAL_SITE). Not a new statute.";
+        const rr = rrrByCode[code];
+        if (rr) extra += "\nRRR " + rr.rrr_type + "  " + rr.party_name + "\n" + rr.description;
+      }
+      if (rec.su_class === "AIR") {
+        extra = "\nAir-rights slab above the authored roof. Proposed volume, not a title.";
+      }
+      if (rec.su_class === "TRANSPORT") {
+        extra = "\nElevated transport corridor. Proposed volume, not a new statute.";
         const rr = rrrByCode[code];
         if (rr) extra += "\nRRR " + rr.rrr_type + "  " + rr.party_name + "\n" + rr.description;
       }

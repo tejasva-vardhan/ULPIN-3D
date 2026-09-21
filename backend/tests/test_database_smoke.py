@@ -22,14 +22,16 @@ class DatabaseSmokeTests(unittest.TestCase):
         engine = create_engine(os.environ["TEST_DATABASE_URL"])
         try:
             with engine.connect() as conn, TemporaryDirectory() as demo_dir:
+                conn.execute(text("ALTER TYPE su_class ADD VALUE IF NOT EXISTS 'TRANSPORT'"))
+                conn.commit()
                 transaction = conn.begin()
                 try:
                     self.assertTrue(check_database(conn)["sfcgal"])
                     with Session(bind=conn) as db, patch.object(settings, "demo_dir", demo_dir):
                         for _ in range(2):
                             result = seed_demo(db)
-                            self.assertEqual(result["spatial_units"], 24)
-                            self.assertEqual(result["extruded_solids"], 24)
+                            self.assertEqual(result["spatial_units"], 25)
+                            self.assertEqual(result["extruded_solids"], 25)
                             missing = db.execute(text("""
                                 SELECT count(*) FROM spatial_unit
                                 WHERE geom_3d IS NULL OR volume_m3 IS NULL OR volume_m3 <= 0
