@@ -1,0 +1,146 @@
+{
+  "type": "FeatureCollection",
+  "name": "DSCE Buildings 05 and 07 — Two-building vertical cadastre demonstration",
+  "description": "Hybrid demonstration dataset using unchanged OpenStreetMap footprints for ways 347171800 and 347591729 plus team field observations from 2026-09-21. The campus parcel is an analysis envelope, not a legal cadastral boundary. Both buildings use three assumed equal-height 3 m floor bands that require review. No surveyed heights, rooms, ownership rights, or official ULPINs are asserted.",
+  "source": {
+    "building_footprints": ["OpenStreetMap way/347171800", "OpenStreetMap way/347591729"],
+    "license": "OpenStreetMap contributors, ODbL",
+    "field_observation_date": "2026-09-21",
+    "vertical_basis": "Three field-declared storeys per building, modelled as equal 3 m bands; measurement pending",
+    "field_evidence": {
+      "DSCE-MECH-05": ["IMG_20260921_113046.HEIC", "IMG_20260921_113445.HEIC"],
+      "DSCE-EEE-07": ["IMG_20260921_113304.HEIC", "IMG_20260921_113315.HEIC", "IMG_20260921_113332.HEIC", "IMG_20260921_113350.HEIC"]
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "DSCE-CAMPUS-DEMO",
+      "properties": {
+        "local_code": "DSCE-CAMPUS-DEMO",
+        "su_class": "PARCEL",
+        "label": "DSCE two-building analysis envelope",
+        "zmin": -2.0,
+        "zmax": 12.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "boundary_status": "DEMONSTRATION_ANALYSIS_ENVELOPE",
+        "disclaimer": "Not an official or surveyed cadastral parcel boundary"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5676150, 12.9086300], [77.5676050, 12.9079400], [77.5680500, 12.9079330], [77.5680600, 12.9086230], [77.5676150, 12.9086300]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05",
+      "properties": {
+        "local_code": "DSCE-MECH-05",
+        "su_class": "BUILDING",
+        "parent_code": "DSCE-CAMPUS-DEMO",
+        "label": "Building No. 05 — Department of Mechanical Engineering",
+        "zmin": 0.0,
+        "zmax": 9.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "confidence": 0.7,
+        "footprint_source": "OpenStreetMap way/347171800",
+        "identity_basis": "Department and building number confirmed from field photograph",
+        "height_basis": "Field-declared 3 storeys × assumed 3 m; measurement pending"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05-GF",
+      "properties": {
+        "local_code": "DSCE-MECH-05-GF", "su_class": "FLOOR", "parent_code": "DSCE-MECH-05",
+        "level_index": 0, "label": "Ground Floor", "zmin": 0.0, "zmax": 3.0,
+        "geom_origin": "MANUAL", "requires_review": true, "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; measured levels pending"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]}
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05-F01",
+      "properties": {
+        "local_code": "DSCE-MECH-05-F01", "su_class": "FLOOR", "parent_code": "DSCE-MECH-05",
+        "level_index": 1, "label": "First Floor", "zmin": 3.0, "zmax": 6.0,
+        "geom_origin": "MANUAL", "requires_review": true, "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; measured levels pending"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]}
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-MECH-05-F02",
+      "properties": {
+        "local_code": "DSCE-MECH-05-F02", "su_class": "FLOOR", "parent_code": "DSCE-MECH-05",
+        "level_index": 2, "label": "Second Floor", "zmin": 6.0, "zmax": 9.0,
+        "geom_origin": "MANUAL", "requires_review": true, "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; measured levels pending"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[77.5676468, 12.9086054], [77.5676442, 12.9084602], [77.5680199, 12.9084537], [77.5680225, 12.9085989], [77.5676468, 12.9086054]]]}
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-EEE-07",
+      "properties": {
+        "local_code": "DSCE-EEE-07",
+        "su_class": "BUILDING",
+        "parent_code": "DSCE-CAMPUS-DEMO",
+        "label": "Building No. 07 — Department of Electrical & Electronics Engineering",
+        "zmin": 0.0,
+        "zmax": 9.0,
+        "geom_origin": "MANUAL",
+        "requires_review": true,
+        "confidence": 0.7,
+        "footprint_source": "OpenStreetMap way/347591729",
+        "identity_basis": "Department and building number supplied from team field identification; photographs retained as evidence references",
+        "height_basis": "Field-declared 3 storeys × assumed 3 m; measurement pending"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[77.5678611, 12.9083964], [77.5676614, 12.9084006], [77.5676521, 12.9079755], [77.5678518, 12.9079713], [77.5678611, 12.9083964]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-EEE-07-GF",
+      "properties": {
+        "local_code": "DSCE-EEE-07-GF", "su_class": "FLOOR", "parent_code": "DSCE-EEE-07",
+        "level_index": 0, "label": "Ground Floor", "zmin": 0.0, "zmax": 3.0,
+        "geom_origin": "MANUAL", "requires_review": true, "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; measured levels pending"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[77.5678611, 12.9083964], [77.5676614, 12.9084006], [77.5676521, 12.9079755], [77.5678518, 12.9079713], [77.5678611, 12.9083964]]]}
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-EEE-07-F01",
+      "properties": {
+        "local_code": "DSCE-EEE-07-F01", "su_class": "FLOOR", "parent_code": "DSCE-EEE-07",
+        "level_index": 1, "label": "First Floor", "zmin": 3.0, "zmax": 6.0,
+        "geom_origin": "MANUAL", "requires_review": true, "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; measured levels pending"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[77.5678611, 12.9083964], [77.5676614, 12.9084006], [77.5676521, 12.9079755], [77.5678518, 12.9079713], [77.5678611, 12.9083964]]]}
+    },
+    {
+      "type": "Feature",
+      "id": "DSCE-EEE-07-F02",
+      "properties": {
+        "local_code": "DSCE-EEE-07-F02", "su_class": "FLOOR", "parent_code": "DSCE-EEE-07",
+        "level_index": 2, "label": "Second Floor", "zmin": 6.0, "zmax": 9.0,
+        "geom_origin": "MANUAL", "requires_review": true, "confidence": 0.6,
+        "vertical_basis": "Operator-declared equal-height band; measured levels pending"
+      },
+      "geometry": {"type": "Polygon", "coordinates": [[[77.5678611, 12.9083964], [77.5676614, 12.9084006], [77.5676521, 12.9079755], [77.5678518, 12.9079713], [77.5678611, 12.9083964]]]}
+    }
+  ]
+}

@@ -198,6 +198,9 @@ function Step({ n, text }) {
   )
 }
 
+// Temporarily hidden for the demo — flip back to true to bring the seed button back.
+const SHOW_SEED_BUTTON = false
+
 function Hero({ onSeed, onViewModel, busy, hasData }) {
   return (
     <Card className="relative overflow-hidden p-6 sm:p-8">
@@ -210,7 +213,8 @@ function Hero({ onSeed, onViewModel, busy, hasData }) {
             transition={{ delay: 0.05 }}
             className="font-serif text-[28px] font-medium leading-[1.15] tracking-tight text-ink-primary sm:text-[34px]"
           >
-            Land records stop at the ground. Stratum keeps going.
+            Property records that finally have a{' '}
+            <em className="text-accent-blue font-semibold not-italic">height</em>.
           </motion.h1>
           <motion.p
             initial={{ opacity: 0, y: 8 }}
@@ -227,9 +231,11 @@ function Hero({ onSeed, onViewModel, busy, hasData }) {
             transition={{ delay: 0.15 }}
             className="mt-5 flex flex-wrap gap-3"
           >
-            <Button onClick={onSeed} loading={busy} icon={PlayCircle}>
-              Seed the demo scene
-            </Button>
+            {SHOW_SEED_BUTTON && (
+              <Button onClick={onSeed} loading={busy} icon={PlayCircle}>
+                Seed the demo scene
+              </Button>
+            )}
             <Button variant="ghost" onClick={onViewModel} icon={Box}>
               {hasData ? 'Open the 3D model' : 'Preview the 3D viewer'}
             </Button>

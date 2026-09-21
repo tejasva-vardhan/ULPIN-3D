@@ -32,3 +32,55 @@ Stop the isolated stack with:
 ```powershell
 docker compose -f docker-compose.demo.yml down
 ```
+
+## DSCE Building No. 05 field case
+
+This case uses the real OpenStreetMap footprint for way `347171800` and the
+three storeys observed during the team field visit on 2026-09-21. Its parcel is
+only a demonstration analysis envelope. Its 3 m floor heights are declared
+assumptions awaiting survey or LiDAR measurement, so all five imported spatial
+units deliberately enter the review queue.
+
+Start the React interface against the isolated demo API in a second PowerShell
+window:
+
+```powershell
+cd frontend
+$env:VITE_API_BASE="http://localhost:8001"
+npm run dev
+```
+
+Then open [the React interface](http://localhost:5173) and use these values:
+
+1. On **Sites**, create a site named `DSCE Mechanical Engineering Block 05`.
+   Enter `DSCE05DEMO0001` as the labelled 14-character placeholder parent
+   ULPIN, `4326` as the source EPSG, and `LOCAL_SITE` as the height reference.
+   Click **Use this site** after creation.
+2. On **Import & Process → Property GeoJSON**, select
+   `data/examples/dsce_mechanical_block_05.geojson`. Choose the DSCE site, keep
+   dataset kind as `floor_plans`, set source EPSG to `4326`, and select
+   `MANUAL` as the default geometry origin.
+3. Click **Import dataset**. In the imported datasets list, find that filename
+   and click **Process**. The expected result is five spatial units and five
+   extruded solids.
+4. Keep the DSCE site selected and open **3D Model**. The layer list must include
+   **Floor**. Use the explode slider to separate and select the Ground, First,
+   and Second Floor volumes at 0–3 m, 3–6 m, and 6–9 m.
+5. On **Spatial Units** or **Review Queue**, confirm that the analysis envelope,
+   building, and floors are marked for review. This is expected: the workflow
+   preserves the OSM footprint but does not promote assumed heights or a
+   non-cadastral envelope to surveyed facts.
+
+Do not describe these floor bands as LiDAR-derived, surveyed, or ownership
+boundaries. No rooms, owners, rights, or official identifiers are included in
+this case.
+
+### Two-building campus view
+
+To demonstrate simultaneous vertical mapping, create a fresh site named
+`DSCE Two-Building Campus Demo` with placeholder parent `DSCETWODEMO001`, then
+repeat the property import using `data/examples/dsce_two_building_demo.geojson`.
+The expected result is nine spatial units and nine extruded solids: one analysis
+envelope, Buildings 05 and 07, and three floor volumes under each building.
+Both footprints preserve their respective OSM geometries. All vertical bands
+remain review-required assumptions.

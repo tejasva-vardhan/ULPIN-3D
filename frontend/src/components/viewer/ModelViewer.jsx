@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import Prism from './Prism.jsx'
 import { makeProjector, findOrigin, ringToPoints } from './viewerGeo.js'
 
-const SOLID_CLASSES = new Set(['UNIT', 'COMMON', 'PARKING', 'BALCONY', 'AIR', 'SUBSURFACE', 'UTILITY'])
+const SOLID_CLASSES = new Set(['FLOOR', 'UNIT', 'COMMON', 'PARKING', 'BALCONY', 'AIR', 'SUBSURFACE', 'UTILITY'])
 
 function frameForUnits(units) {
   const project = makeProjector(findOrigin(units))
